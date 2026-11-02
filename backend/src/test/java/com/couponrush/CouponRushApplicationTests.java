@@ -4,9 +4,6 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.ConsumerFactory;
@@ -25,9 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 1단계 뼈대 검증: 앱이 뜨고, Postgres(pgvector)/Redis/Kafka 에 실제로 붙는지 확인한다.
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@IntegrationTest
 class CouponRushApplicationTests {
 
     @Autowired JdbcTemplate jdbcTemplate;
@@ -75,8 +70,8 @@ class CouponRushApplicationTests {
     }
 
     @Test
-    void 그_외_경로는_인증이_필요하다() throws Exception {
+    void 그_외_경로는_인증이_필요하고_401_을_준다() throws Exception {
         mockMvc.perform(get("/api/anything"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 }

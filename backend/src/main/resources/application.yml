@@ -29,6 +29,34 @@ spring:
     consumer:
       auto-offset-reset: earliest
 
+  security:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: ${KAKAO_CLIENT_ID}          # 카카오 REST API 키
+            client-secret: ${KAKAO_CLIENT_SECRET}
+            client-authentication-method: client_secret_post   # 카카오는 secret 을 form body 로 받음
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: profile_nickname                # 이메일은 비즈 앱 심사가 필요해 요청하지 않음
+            client-name: Kakao
+        provider:
+          kakao:   # 카카오는 Spring 내장 provider 가 아니라 직접 지정
+            authorization-uri: https://kauth.kakao.com/oauth/authorize
+            token-uri: https://kauth.kakao.com/oauth/token
+            user-info-uri: https://kapi.kakao.com/v2/user/me
+            user-name-attribute: id
+
+jwt:
+  secret: ${JWT_SECRET}                    # 32바이트 이상. 부족하면 기동 시 실패한다
+  access-token-validity: ${JWT_ACCESS_TOKEN_VALIDITY:30m}
+
+app:
+  oauth2:
+    # 로그인 성공/실패 후 돌아갈 프론트엔드 주소 (비밀값이 아니라 기본값 허용)
+    redirect-uri: ${FRONTEND_OAUTH2_REDIRECT_URI:http://localhost:5173/oauth/callback}
+
 management:
   endpoints:
     web:
