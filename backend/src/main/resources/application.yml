@@ -1,0 +1,39 @@
+spring:
+  application:
+    name: coupon-rush
+  # infra/.env 를 프로퍼티로 읽어온다 (backend/ 에서 실행 기준). 없으면 무시.
+  # → 비밀번호를 코드/설정 파일에 두지 않고 docker-compose 와 같은 .env 하나로 관리
+  config:
+    import: optional:file:../infra/.env[.properties]
+
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update   # 초기 단계용. 스키마가 안정되면 Flyway + validate 로 전환
+    properties:
+      hibernate:
+        format_sql: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      auto-offset-reset: earliest
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-components: always   # db, redis 상태를 개별로 확인 (상세 정보는 노출 안 함)

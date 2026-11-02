@@ -1,0 +1,34 @@
+### Secrets ###
+.env
+.env.*
+!.env.example
+
+### Gradle / Java ###
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+out/
+bin/
+*.class
+*.log
+
+### IntelliJ / VS Code / Eclipse ###
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.classpath
+.project
+.settings/
+.apt_generated/
+.factorypath
+
+### Frontend (6단계) ###
+node_modules/
+dist/
+*.local
+
+### OS ###
+.DS_Store
+Thumbs.db
