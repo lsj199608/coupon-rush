@@ -59,17 +59,4 @@ class KakaoOAuth2UserInfoTest {
         assertThatThrownBy(() -> new KakaoOAuth2UserInfo(Map.of("kakao_account", Map.of())))
                 .isInstanceOf(IllegalArgumentException.class);
     }
-
-    @Test
-    void 팩토리는_registrationId_로_구현체를_고른다() {
-        OAuth2UserInfo userInfo = OAuth2UserInfoFactory.of("kakao", Map.of("id", 1L));
-
-        assertThat(userInfo).isInstanceOf(KakaoOAuth2UserInfo.class);
-    }
-
-    @Test
-    void 팩토리는_지원하지_않는_제공자면_예외() {
-        assertThatThrownBy(() -> OAuth2UserInfoFactory.of("facebook", Map.of("id", 1L)))
-                .isInstanceOf(IllegalArgumentException.class);
-    }
 }

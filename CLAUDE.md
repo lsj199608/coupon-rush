@@ -41,8 +41,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - [x] 1. 프로젝트 뼈대 + docker-compose
 - [ ] 2. 소셜 로그인 + JWT  ← 진행 중
   - [x] 카카오 로그인 + access token 발급 (프론트로 #accessToken= 리다이렉트)
-  - [ ] JWT 인증 필터 (Authorization: Bearer) + /api/users/me
-  - [ ] 네이버, 구글 (OAuth2UserInfo 구현체 + OAuth2Provider/Factory 분기 추가)
+  - [x] 네이버, 구글 로그인 (Naver/GoogleOAuth2UserInfo)
+  - [ ] JWT 인증 필터 (Authorization: Bearer) + /api/users/me  ← 다음 작업
 - [ ] 3. 쿠폰 발급 API (DB 기반)
 - [ ] 4. Redis로 재고 차감 개선 + 동시성 테스트
 - [ ] 5. Kafka 비동기 처리
@@ -61,8 +61,19 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   통합 테스트는 @IntegrationTest 메타 애너테이션 사용 (더미 비밀값 고정 + 컨텍스트 캐시 공유).
 - 회원 식별 키는 (provider, providerId). 닉네임은 바뀔 수 있어 식별에 쓰지 않고 로그인마다 갱신.
   이메일은 nullable. 테이블명 users ("user"는 PostgreSQL 예약어).
+  같은 사람이 다른 제공자로 로그인하면 별도 회원 (이메일로 계정 자동 병합 안 함 — 계정 탈취 위험).
+- 제공자 공통 규칙(기본 닉네임 "{registrationId}_{id}", 50자 자르기, 빈 이메일 무시)은 AbstractOAuth2UserInfo에.
+  구현체는 응답에서 값을 꺼내는 위치만 정의. 새 제공자 = 구현체 + OAuth2Provider 값 + Factory switch 분기.
+- 구글은 scope에 openid를 넣지 않는다 (넣으면 OidcUserService로 빠져 CustomOAuth2UserService를 안 탐).
+  구글 이메일은 email_verified=true일 때만 저장. 네이버는 user-name-attribute=response (중첩 응답).
 - JWT에는 userId(sub)와 role만 담는다. 토큰은 URL fragment(#)로 전달해 서버 로그/Referer에 남지 않게 한다.
 - 미인증 API 요청은 로그인 리다이렉트(302)가 아니라 401.
+- 주의: Hibernate는 @Enumerated(STRING) 컬럼에 테이블 생성 시점의 enum 값으로 CHECK 제약을 만들고,
+  ddl-auto: update는 이 제약을 갱신하지 않는다. enum 값 추가 후 기존 로컬 DB에서
+  "violates check constraint users_provider_check" 가 나면 제약을 새 값 목록으로 교체한다:
+  ALTER TABLE users DROP CONSTRAINT users_provider_check;
+  ALTER TABLE users ADD CONSTRAINT users_provider_check CHECK (provider IN ('KAKAO','NAVER','GOOGLE'));
+  (근본 해결: Flyway 도입 후 ddl-auto: validate)
 
 ## 새 PC에서 시작하기
 1. Java 21, Docker Desktop, Git 설치 (Gradle은 gradlew가 받음)

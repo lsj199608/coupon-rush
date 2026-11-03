@@ -4,10 +4,12 @@ import java.util.Arrays;
 
 /**
  * 소셜 로그인 제공자. 값은 Spring Security 의 registrationId(application.yml 의 registration 키)와 매핑된다.
+ * DB 에는 enum 이름(KAKAO/NAVER/GOOGLE)으로 저장된다.
  */
 public enum OAuth2Provider {
-    KAKAO("kakao");
-    // NAVER("naver"), GOOGLE("google") 은 추가 시 여기에
+    KAKAO("kakao"),
+    NAVER("naver"),
+    GOOGLE("google");
 
     private final String registrationId;
 

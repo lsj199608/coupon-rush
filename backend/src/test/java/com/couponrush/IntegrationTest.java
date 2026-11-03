@@ -19,6 +19,10 @@ import java.lang.annotation.Target;
 @SpringBootTest(properties = {
         "KAKAO_CLIENT_ID=test-kakao-client-id",
         "KAKAO_CLIENT_SECRET=test-kakao-client-secret",
+        "NAVER_CLIENT_ID=test-naver-client-id",
+        "NAVER_CLIENT_SECRET=test-naver-client-secret",
+        "GOOGLE_CLIENT_ID=test-google-client-id",
+        "GOOGLE_CLIENT_SECRET=test-google-client-secret",
         "JWT_SECRET=test-jwt-secret-key-must-be-at-least-32-bytes",
         "FRONTEND_OAUTH2_REDIRECT_URI=http://localhost:5173/oauth/callback"
 })

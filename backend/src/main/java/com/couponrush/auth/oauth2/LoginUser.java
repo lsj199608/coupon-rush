@@ -6,6 +6,8 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 
 import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -22,7 +24,8 @@ public class LoginUser implements OAuth2User {
     public LoginUser(Long userId, Role role, Map<String, Object> attributes) {
         this.userId = userId;
         this.role = role;
-        this.attributes = Map.copyOf(attributes);
+        // Map.copyOf 는 null 값을 거부한다. 제공자 응답 JSON 에는 null 필드가 올 수 있어 LinkedHashMap 으로 복사
+        this.attributes = Collections.unmodifiableMap(new LinkedHashMap<>(attributes));
     }
 
     public Long getUserId() {

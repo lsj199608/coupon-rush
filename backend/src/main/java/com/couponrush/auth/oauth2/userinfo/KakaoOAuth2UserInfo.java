@@ -17,17 +17,15 @@ import java.util.Optional;
  * }
  * </pre>
  */
-public class KakaoOAuth2UserInfo implements OAuth2UserInfo {
+public class KakaoOAuth2UserInfo extends AbstractOAuth2UserInfo {
 
-    private static final int MAX_NICKNAME_LENGTH = 50;
-
-    private final Map<String, Object> attributes;
+    private final String id;
+    private final Map<String, Object> kakaoAccount;
 
     public KakaoOAuth2UserInfo(Map<String, Object> attributes) {
-        if (attributes == null || attributes.get("id") == null) {
-            throw new IllegalArgumentException("카카오 사용자 정보에 id 가 없습니다.");
-        }
-        this.attributes = attributes;
+        Map<String, Object> attrs = attributes == null ? Map.of() : attributes;
+        this.id = requireId(attrs.get("id"), "카카오");
+        this.kakaoAccount = asMap(attrs.get("kakao_account"));
     }
 
     @Override
@@ -37,36 +35,16 @@ public class KakaoOAuth2UserInfo implements OAuth2UserInfo {
 
     @Override
     public String getProviderId() {
-        return String.valueOf(attributes.get("id"));
+        return id;
     }
 
     @Override
-    public String getNickname() {
-        return asString(profile().get("nickname"))
-                .filter(s -> !s.isBlank())
-                .map(s -> s.length() > MAX_NICKNAME_LENGTH ? s.substring(0, MAX_NICKNAME_LENGTH) : s)
-                .orElse("kakao_" + getProviderId());
+    protected Optional<String> rawNickname() {
+        return asString(asMap(kakaoAccount.get("profile")).get("nickname"));
     }
 
     @Override
-    public Optional<String> getEmail() {
-        return asString(kakaoAccount().get("email")).filter(s -> !s.isBlank());
-    }
-
-    private Map<String, Object> kakaoAccount() {
-        return asMap(attributes.get("kakao_account"));
-    }
-
-    private Map<String, Object> profile() {
-        return asMap(kakaoAccount().get("profile"));
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> asMap(Object value) {
-        return value instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
-    }
-
-    private static Optional<String> asString(Object value) {
-        return value instanceof String s ? Optional.of(s) : Optional.empty();
+    protected Optional<String> rawEmail() {
+        return asString(kakaoAccount.get("email"));
     }
 }
