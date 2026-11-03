@@ -14,7 +14,9 @@ spring:
   jpa:
     open-in-view: false
     hibernate:
-      ddl-auto: update   # 초기 단계용. 스키마가 안정되면 Flyway + validate 로 전환
+      # 스키마 변경은 Flyway(db/migration)만 한다. Hibernate 는 엔티티와 DB 가 맞는지 검사만 하고,
+      # 어긋나면 기동 시 실패한다 → 마이그레이션 누락을 바로 알 수 있다.
+      ddl-auto: validate
     properties:
       hibernate:
         format_sql: true

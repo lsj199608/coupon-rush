@@ -68,12 +68,12 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   구글 이메일은 email_verified=true일 때만 저장. 네이버는 user-name-attribute=response (중첩 응답).
 - JWT에는 userId(sub)와 role만 담는다. 토큰은 URL fragment(#)로 전달해 서버 로그/Referer에 남지 않게 한다.
 - 미인증 API 요청은 로그인 리다이렉트(302)가 아니라 401.
-- 주의: Hibernate는 @Enumerated(STRING) 컬럼에 테이블 생성 시점의 enum 값으로 CHECK 제약을 만들고,
-  ddl-auto: update는 이 제약을 갱신하지 않는다. enum 값 추가 후 기존 로컬 DB에서
-  "violates check constraint users_provider_check" 가 나면 제약을 새 값 목록으로 교체한다:
-  ALTER TABLE users DROP CONSTRAINT users_provider_check;
-  ALTER TABLE users ADD CONSTRAINT users_provider_check CHECK (provider IN ('KAKAO','NAVER','GOOGLE'));
-  (근본 해결: Flyway 도입 후 ddl-auto: validate)
+- 스키마는 Flyway로만 변경한다 (backend/src/main/resources/db/migration/V{n}__설명.sql).
+  ddl-auto: validate — 엔티티와 스키마가 다르면 기동 실패. 이미 적용된 마이그레이션 파일은 수정하지 않고 새 버전을 추가한다.
+- enum(OAuth2Provider, Role)에 값을 추가하면 CHECK 제약(users_provider_check, users_role_check)을
+  바꾸는 마이그레이션도 추가해야 한다. 빠뜨리면 FlywayMigrationTest가 실패한다.
+- Flyway 도입 전(ddl-auto: update 시절)에 만들어진 로컬 DB는 "non-empty schema without schema history table"로
+  기동이 실패한다. 로컬 테스트 데이터뿐이므로 DROP TABLE users; 후 재기동하면 V1부터 적용된다.
 
 ## 새 PC에서 시작하기
 1. Java 21, Docker Desktop, Git 설치 (Gradle은 gradlew가 받음)
