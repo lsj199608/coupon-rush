@@ -1,6 +1,8 @@
 package com.couponrush.user;
 
 import com.couponrush.auth.oauth2.userinfo.OAuth2UserInfo;
+import com.couponrush.global.error.BusinessException;
+import com.couponrush.global.error.ErrorCode;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,6 +13,12 @@ public class UserService {
 
     public UserService(UserRepository userRepository) {
         this.userRepository = userRepository;
+    }
+
+    @Transactional(readOnly = true)
+    public User getUser(Long userId) {
+        return userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
     }
 
     /**

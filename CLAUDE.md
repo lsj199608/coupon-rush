@@ -39,11 +39,12 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 작업 단계가 끝날 때마다 이 섹션을 갱신하고 함께 커밋한다. (여러 PC에서 이어서 작업하기 위함)
 
 - [x] 1. 프로젝트 뼈대 + docker-compose
-- [ ] 2. 소셜 로그인 + JWT  ← 진행 중
+- [x] 2. 소셜 로그인 + JWT
   - [x] 카카오 로그인 + access token 발급 (프론트로 #accessToken= 리다이렉트)
   - [x] 네이버, 구글 로그인 (Naver/GoogleOAuth2UserInfo)
-  - [ ] JWT 인증 필터 (Authorization: Bearer) + /api/users/me  ← 다음 작업
-- [ ] 3. 쿠폰 발급 API (DB 기반)
+  - [x] Flyway 도입 (ddl-auto: validate)
+  - [x] Access(30m) + Refresh(14d, Redis), /api/auth/refresh, /api/auth/logout, 블랙리스트, JWT 필터, /api/users/me
+- [ ] 3. 쿠폰 발급 API (DB 기반)  ← 다음 작업
 - [ ] 4. Redis로 재고 차감 개선 + 동시성 테스트
 - [ ] 5. Kafka 비동기 처리
 - [ ] 6. React 화면 연동
@@ -66,8 +67,18 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   구현체는 응답에서 값을 꺼내는 위치만 정의. 새 제공자 = 구현체 + OAuth2Provider 값 + Factory switch 분기.
 - 구글은 scope에 openid를 넣지 않는다 (넣으면 OidcUserService로 빠져 CustomOAuth2UserService를 안 탐).
   구글 이메일은 email_verified=true일 때만 저장. 네이버는 user-name-attribute=response (중첩 응답).
-- JWT에는 userId(sub)와 role만 담는다. 토큰은 URL fragment(#)로 전달해 서버 로그/Referer에 남지 않게 한다.
-- 미인증 API 요청은 로그인 리다이렉트(302)가 아니라 401.
+- JWT에는 userId(sub), token_type(access|refresh), jti만 담고 access에만 role 추가. 개인정보는 넣지 않는다.
+  token_type으로 refresh를 Bearer로 쓰는 것(또는 반대)을 막는다.
+- 토큰 전달: access는 URL fragment(#accessToken=) → 프론트 메모리 보관,
+  refresh는 HttpOnly 쿠키(refresh_token, Path=/api/auth, SameSite=Strict, Secure는 AUTH_COOKIE_SECURE).
+  배포 시 프론트/백엔드가 다른 사이트면 SameSite=None + Secure로 바꿔야 한다.
+- Redis 키: refresh:{userId} → SHA-256(refresh token), TTL 14d (사용자당 1개, 재로그인 시 이전 기기 무효)
+  blacklist:{jti} → 로그아웃된 access token, TTL = 남은 유효시간. JwtAuthenticationFilter가 매 요청 확인.
+- refresh 시 role은 DB에서 다시 읽는다. refresh token rotation은 아직 안 함 (추후 선택).
+- 에러 응답은 {"code","message"} (global/error: ErrorCode, BusinessException, GlobalExceptionHandler).
+  필터 단계 인증 실패는 JsonAuthenticationEntryPoint가 같은 형식으로 401 응답
+  (UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID / TOKEN_REVOKED / REFRESH_TOKEN_*).
+- 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.
 - 스키마는 Flyway로만 변경한다 (backend/src/main/resources/db/migration/V{n}__설명.sql).
   ddl-auto: validate — 엔티티와 스키마가 다르면 기동 실패. 이미 적용된 마이그레이션 파일은 수정하지 않고 새 버전을 추가한다.
 - enum(OAuth2Provider, Role)에 값을 추가하면 CHECK 제약(users_provider_check, users_role_check)을
