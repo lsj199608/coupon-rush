@@ -1,5 +1,6 @@
 package com.couponrush.global.config;
 
+import com.couponrush.auth.jwt.JsonAccessDeniedHandler;
 import com.couponrush.auth.jwt.JsonAuthenticationEntryPoint;
 import com.couponrush.auth.jwt.JwtAuthenticationFilter;
 import com.couponrush.auth.jwt.JwtTokenProvider;
@@ -33,19 +34,22 @@ public class SecurityConfig {
     private final JsonAuthenticationEntryPoint authenticationEntryPoint;
     private final JwtTokenProvider jwtTokenProvider;
     private final AccessTokenBlacklist accessTokenBlacklist;
+    private final JsonAccessDeniedHandler accessDeniedHandler;
 
     public SecurityConfig(CustomOAuth2UserService customOAuth2UserService,
                           OAuth2LoginSuccessHandler successHandler,
                           OAuth2LoginFailureHandler failureHandler,
                           JsonAuthenticationEntryPoint authenticationEntryPoint,
                           JwtTokenProvider jwtTokenProvider,
-                          AccessTokenBlacklist accessTokenBlacklist) {
+                          AccessTokenBlacklist accessTokenBlacklist,
+                          JsonAccessDeniedHandler accessDeniedHandler) {
         this.customOAuth2UserService = customOAuth2UserService;
         this.successHandler = successHandler;
         this.failureHandler = failureHandler;
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.jwtTokenProvider = jwtTokenProvider;
         this.accessTokenBlacklist = accessTokenBlacklist;
+        this.accessDeniedHandler = accessDeniedHandler;
     }
 
     @Bean
@@ -59,6 +63,9 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/health/**").permitAll()
                         // access token 이 만료된 상태에서 호출하는 API 라 인증 없이 허용 (refresh token 쿠키로 검증)
                         .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
+                        // 쿠폰 정보(남은 수량)는 로그인 전에도 이벤트 페이지에서 볼 수 있게 공개
+                        .requestMatchers(HttpMethod.GET, "/api/coupons/*").permitAll()
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2Login(oauth2 -> oauth2
                         .userInfoEndpoint(userInfo -> userInfo.userService(customOAuth2UserService))
@@ -67,7 +74,9 @@ public class SecurityConfig {
                 .addFilterBefore(new JwtAuthenticationFilter(jwtTokenProvider, accessTokenBlacklist),
                         UsernamePasswordAuthenticationFilter.class)
                 // API 서버이므로 미인증 요청은 로그인 페이지 리다이렉트(302)가 아니라 401 JSON 으로 응답
-                .exceptionHandling(e -> e.authenticationEntryPoint(authenticationEntryPoint))
+                .exceptionHandling(e -> e
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
                 .build();
     }
 }
