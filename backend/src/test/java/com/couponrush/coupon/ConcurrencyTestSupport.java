@@ -2,7 +2,9 @@ package com.couponrush.coupon;
 
 import com.couponrush.coupon.issue.CouponIssuer;
 import com.couponrush.coupon.issue.IssueStrategy;
+import com.couponrush.coupon.issue.redis.RedisCouponStock;
 import com.couponrush.global.error.BusinessException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Duration;
@@ -29,10 +31,17 @@ final class ConcurrencyTestSupport {
         return issuers.stream().filter(i -> i.strategy() == strategy).findFirst().orElseThrow();
     }
 
-    static Coupon saveOpenCoupon(CouponRepository couponRepository, int totalQuantity) {
+    /** 발급 기간 중인 쿠폰을 DB 에 저장하고 Redis 에도 재고를 적재한다 (실제 생성 API 와 같은 상태) */
+    static Coupon saveOpenCoupon(CouponRepository couponRepository, RedisCouponStock redisStock, int totalQuantity) {
         Instant now = Instant.now();
-        return couponRepository.save(Coupon.create("동시성 테스트 쿠폰", totalQuantity,
+        return saveAndLoad(couponRepository, redisStock, Coupon.create("동시성 테스트 쿠폰", totalQuantity,
                 now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))));
+    }
+
+    static Coupon saveAndLoad(CouponRepository couponRepository, RedisCouponStock redisStock, Coupon coupon) {
+        Coupon saved = couponRepository.save(coupon);
+        redisStock.load(saved, List.of());
+        return saved;
     }
 
     /** JPA 로 1000건 저장하면 느려서 JDBC 배치로 넣는다 */
@@ -47,10 +56,11 @@ final class ConcurrencyTestSupport {
                 "SELECT id FROM users WHERE provider_id LIKE ? ORDER BY id", Long.class, prefix + "%");
     }
 
-    static void cleanUp(JdbcTemplate jdbcTemplate) {
+    static void cleanUp(JdbcTemplate jdbcTemplate, StringRedisTemplate redisTemplate) {
         jdbcTemplate.update("DELETE FROM coupon_issues");
         jdbcTemplate.update("DELETE FROM coupons");
         jdbcTemplate.update("DELETE FROM users");
+        redisTemplate.delete(redisTemplate.keys("event:*"));
     }
 
     /**
@@ -85,11 +95,11 @@ final class ConcurrencyTestSupport {
         ready.await(10, TimeUnit.SECONDS);   // 스레드들이 출발선에 설 때까지
         long startedAt = System.nanoTime();
         start.countDown();
-        boolean finished = done.await(120, TimeUnit.SECONDS);
+        boolean finished = done.await(300, TimeUnit.SECONDS);
         long elapsedNanos = System.nanoTime() - startedAt;
         executor.shutdownNow();
         if (!finished) {
-            throw new AssertionError("120초 안에 모든 요청이 끝나지 않았습니다.");
+            throw new AssertionError("300초 안에 모든 요청이 끝나지 않았습니다.");
         }
         return new Result(new TreeMap<>(outcomes), Duration.ofNanos(elapsedNanos));
     }

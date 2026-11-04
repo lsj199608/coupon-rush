@@ -2,8 +2,10 @@ package com.couponrush.coupon;
 
 import com.couponrush.coupon.dto.CouponCreateRequest;
 import com.couponrush.coupon.dto.CouponResponse;
+import com.couponrush.coupon.dto.CouponStockResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -22,10 +24,20 @@ public class AdminCouponController {
         this.couponService = couponService;
     }
 
+    /** 쿠폰 생성. DB 커밋 후 Redis 에 재고를 적재한다 (이벤트 오픈 전 미리 적재) */
     @PostMapping
     public ResponseEntity<CouponResponse> create(@Valid @RequestBody CouponCreateRequest request) {
         Coupon coupon = couponService.create(request);
         return ResponseEntity.created(URI.create("/api/coupons/" + coupon.getId()))
                 .body(CouponResponse.from(coupon));
+    }
+
+    /**
+     * DB 발급 이력 기준으로 Redis 재고를 다시 적재 (Redis 데이터 유실, 적재 실패, 불일치 복구용).
+     * 발급이 진행 중이 아닐 때 호출한다.
+     */
+    @PostMapping("/{couponId}/stock/sync")
+    public CouponStockResponse syncStock(@PathVariable Long couponId) {
+        return couponService.syncStock(couponId);
     }
 }

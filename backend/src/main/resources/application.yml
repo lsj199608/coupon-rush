@@ -82,8 +82,8 @@ app:
     redirect-uri: ${FRONTEND_OAUTH2_REDIRECT_URI:http://localhost:5173/oauth/callback}
   coupon:
     issue:
-      # 재고 동시성 제어 방식: conditional-update(기본) | pessimistic-lock | optimistic-lock
-      strategy: ${COUPON_ISSUE_STRATEGY:conditional-update}
+      # 재고 동시성 제어 방식: redis(기본) | conditional-update | pessimistic-lock | optimistic-lock
+      strategy: ${COUPON_ISSUE_STRATEGY:redis}
       optimistic-max-attempts: 100
   auth:
     cookie:

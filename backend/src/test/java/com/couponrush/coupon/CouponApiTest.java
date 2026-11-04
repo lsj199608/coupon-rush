@@ -2,6 +2,7 @@ package com.couponrush.coupon;
 
 import com.couponrush.IntegrationTest;
 import com.couponrush.auth.AuthService;
+import com.couponrush.coupon.issue.redis.RedisCouponStock;
 import com.couponrush.user.OAuth2Provider;
 import com.couponrush.user.Role;
 import com.couponrush.user.User;
@@ -42,6 +43,7 @@ class CouponApiTest {
     @Autowired CouponRepository couponRepository;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired StringRedisTemplate redisTemplate;
+    @Autowired RedisCouponStock redisStock;
 
     User user;
     String userToken;
@@ -61,19 +63,46 @@ class CouponApiTest {
         jdbcTemplate.update("DELETE FROM coupons");
         jdbcTemplate.update("DELETE FROM users");
         redisTemplate.delete(redisTemplate.keys("refresh:*"));
+        redisTemplate.delete(redisTemplate.keys("event:*"));
     }
 
     @Nested
     class 쿠폰_생성_관리자 {
 
         @Test
-        void 관리자는_쿠폰을_만들_수_있다() throws Exception {
-            createCoupon(adminToken, validRequest(100))
+        void 관리자는_쿠폰을_만들_수_있고_Redis_에_재고가_미리_적재된다() throws Exception {
+            String body = createCoupon(adminToken, validRequest(100))
                     .andExpect(status().isCreated())
                     .andExpect(header().string(HttpHeaders.LOCATION, org.hamcrest.Matchers.startsWith("/api/coupons/")))
                     .andExpect(jsonPath("$.name").value("오픈 기념 쿠폰"))
                     .andExpect(jsonPath("$.totalQuantity").value(100))
-                    .andExpect(jsonPath("$.remainingQuantity").value(100));
+                    .andExpect(jsonPath("$.remainingQuantity").value(100))
+                    .andReturn().getResponse().getContentAsString();
+            long couponId = objectMapper.readTree(body).get("id").asLong();
+
+            org.assertj.core.api.Assertions.assertThat(redisTemplate.opsForValue().get("event:{" + couponId + "}:stock"))
+                    .isEqualTo("100");
+        }
+
+        @Test
+        void 관리자는_DB_기준으로_Redis_재고를_재동기화할_수_있다() throws Exception {
+            Instant now = Instant.now();
+            Coupon coupon = couponRepository.save(Coupon.create("미적재", 5, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))));   // DB 에만 있고 Redis 에는 없음
+
+            mockMvc.perform(post("/api/admin/coupons/{id}/stock/sync", coupon.getId())
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.redisStock").value(5))
+                    .andExpect(jsonPath("$.redisIssuedCount").value(0));
+        }
+
+        @Test
+        void 일반_사용자는_재동기화할_수_없다() throws Exception {
+            Coupon coupon = openCoupon(5);
+
+            mockMvc.perform(post("/api/admin/coupons/{id}/stock/sync", coupon.getId())
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + userToken))
+                    .andExpect(status().isForbidden());
         }
 
         @Test
@@ -192,11 +221,27 @@ class CouponApiTest {
         @Test
         void 기간이_아니면_400_COUPON_NOT_IN_PERIOD() throws Exception {
             Instant now = Instant.now();
-            Coupon coupon = couponRepository.save(Coupon.create("예정", 5, now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(2))));
+            Coupon coupon = ConcurrencyTestSupport.saveAndLoad(couponRepository, redisStock, Coupon.create("예정", 5, now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(2))));
 
             issue(coupon.getId(), userToken)
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.code").value("COUPON_NOT_IN_PERIOD"));
+        }
+
+        @Test
+        void Redis_재고가_없으면_503_COUPON_STOCK_NOT_READY_이고_재동기화하면_발급된다() throws Exception {
+            Coupon coupon = openCoupon(5);
+            redisTemplate.delete(redisTemplate.keys("event:*"));   // Redis 데이터 유실
+
+            issue(coupon.getId(), userToken)
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.code").value("COUPON_STOCK_NOT_READY"));
+
+            mockMvc.perform(post("/api/admin/coupons/{id}/stock/sync", coupon.getId())
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
+                    .andExpect(status().isOk());
+
+            issue(coupon.getId(), userToken).andExpect(status().isCreated());
         }
     }
 
@@ -223,7 +268,8 @@ class CouponApiTest {
 
     private Coupon openCoupon(int totalQuantity) {
         Instant now = Instant.now();
-        return couponRepository.save(Coupon.create("API 테스트 쿠폰", totalQuantity,
+        // 기본 발급 방식이 REDIS 라서 실제 생성 API 처럼 Redis 에도 재고를 적재한다
+        return ConcurrencyTestSupport.saveAndLoad(couponRepository, redisStock, Coupon.create("API 테스트 쿠폰", totalQuantity,
                 now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))));
     }
 }

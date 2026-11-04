@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.couponrush.coupon.issue.redis.RedisCouponStock;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Duration;
@@ -37,6 +39,8 @@ class CouponIssueServiceTest {
     @Autowired CouponIssueRepository couponIssueRepository;
     @Autowired UserRepository userRepository;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired StringRedisTemplate redisTemplate;
+    @Autowired RedisCouponStock redisStock;
 
     User user;
 
@@ -47,7 +51,7 @@ class CouponIssueServiceTest {
 
     @AfterEach
     void tearDown() {
-        ConcurrencyTestSupport.cleanUp(jdbcTemplate);
+        ConcurrencyTestSupport.cleanUp(jdbcTemplate, redisTemplate);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -89,8 +93,8 @@ class CouponIssueServiceTest {
     @EnumSource(IssueStrategy.class)
     void 발급_시작_전이나_종료_후면_COUPON_NOT_IN_PERIOD(IssueStrategy strategy) {
         Instant now = Instant.now();
-        Coupon notStarted = couponRepository.save(Coupon.create("예정", 10, now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(2))));
-        Coupon ended = couponRepository.save(Coupon.create("종료", 10, now.minus(Duration.ofHours(2)), now.minus(Duration.ofHours(1))));
+        Coupon notStarted = ConcurrencyTestSupport.saveAndLoad(couponRepository, redisStock, Coupon.create("예정", 10, now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(2))));
+        Coupon ended = ConcurrencyTestSupport.saveAndLoad(couponRepository, redisStock, Coupon.create("종료", 10, now.minus(Duration.ofHours(2)), now.minus(Duration.ofHours(1))));
 
         assertErrorCode(() -> issuer(strategy).issue(notStarted.getId(), user.getId()), ErrorCode.COUPON_NOT_IN_PERIOD);
         assertErrorCode(() -> issuer(strategy).issue(ended.getId(), user.getId()), ErrorCode.COUPON_NOT_IN_PERIOD);
@@ -104,8 +108,8 @@ class CouponIssueServiceTest {
     }
 
     @Test
-    void 기본_발급_방식은_조건부_UPDATE_다() {
-        assertThat(couponIssueService.getStrategy()).isEqualTo(IssueStrategy.CONDITIONAL_UPDATE);
+    void 기본_발급_방식은_REDIS_다() {
+        assertThat(couponIssueService.getStrategy()).isEqualTo(IssueStrategy.REDIS);
     }
 
     @Test
@@ -128,7 +132,7 @@ class CouponIssueServiceTest {
 
     private Coupon openCoupon(int totalQuantity) {
         Instant now = Instant.now();
-        return couponRepository.save(Coupon.create("테스트 쿠폰", totalQuantity,
+        return ConcurrencyTestSupport.saveAndLoad(couponRepository, redisStock, Coupon.create("테스트 쿠폰", totalQuantity,
                 now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))));
     }
 

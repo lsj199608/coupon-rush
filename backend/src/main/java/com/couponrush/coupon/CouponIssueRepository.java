@@ -13,6 +13,10 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
 
     long countByCouponId(Long couponId);
 
+    /** Redis 재고 재동기화용: 이미 발급받은 사용자 */
+    @Query("SELECT ci.userId FROM CouponIssue ci WHERE ci.couponId = :couponId")
+    List<Long> findUserIdsByCouponId(@Param("couponId") Long couponId);
+
     /** 연관관계 없이 ID 로 조인 (Hibernate 6 의 엔티티 조인) — N+1 없이 쿠폰 이름까지 한 번에 */
     @Query("""
             SELECT new com.couponrush.coupon.dto.MyCouponResponse(ci.id, c.id, c.name, ci.issuedAt)

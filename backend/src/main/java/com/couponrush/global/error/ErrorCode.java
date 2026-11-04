@@ -29,7 +29,9 @@ public enum ErrorCode {
     COUPON_SOLD_OUT(HttpStatus.CONFLICT, "쿠폰이 모두 소진되었습니다."),
     COUPON_ALREADY_ISSUED(HttpStatus.CONFLICT, "이미 발급받은 쿠폰입니다."),
     /** 낙관적 락 방식에서 재시도 횟수를 넘긴 경우 (재고는 남아 있을 수 있음) */
-    COUPON_ISSUE_CONFLICT(HttpStatus.CONFLICT, "요청이 몰려 발급하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    COUPON_ISSUE_CONFLICT(HttpStatus.CONFLICT, "요청이 몰려 발급하지 못했습니다. 잠시 후 다시 시도해 주세요."),
+    /** Redis 방식에서 재고가 적재되지 않은 경우 (관리자 재동기화 필요) */
+    COUPON_STOCK_NOT_READY(HttpStatus.SERVICE_UNAVAILABLE, "쿠폰 발급 준비 중입니다. 잠시 후 다시 시도해 주세요.");
 
     private final HttpStatus status;
     private final String message;

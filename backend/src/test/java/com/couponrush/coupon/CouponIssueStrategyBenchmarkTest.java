@@ -9,6 +9,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.couponrush.coupon.issue.redis.RedisCouponStock;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.nio.charset.StandardCharsets;
@@ -42,10 +44,12 @@ class CouponIssueStrategyBenchmarkTest {
     @Autowired CouponRepository couponRepository;
     @Autowired CouponIssueRepository couponIssueRepository;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired StringRedisTemplate redisTemplate;
+    @Autowired RedisCouponStock redisStock;
 
     @AfterEach
     void tearDown() {
-        cleanUp(jdbcTemplate);
+        cleanUp(jdbcTemplate, redisTemplate);
     }
 
     @Test
@@ -93,7 +97,7 @@ class CouponIssueStrategyBenchmarkTest {
 
     private Result runOnce(IssueStrategy strategy, int stock) throws InterruptedException {
         CouponIssuer issuer = issuer(issuers, strategy);
-        Coupon coupon = saveOpenCoupon(couponRepository, stock);
+        Coupon coupon = saveOpenCoupon(couponRepository, redisStock, stock);
         List<Long> userIds = createUsers(jdbcTemplate, REQUEST_COUNT);
 
         Result result = runConcurrently(userIds.stream()
@@ -113,7 +117,7 @@ class CouponIssueStrategyBenchmarkTest {
             assertThat(result.count("SUCCESS")).as(strategy + " 재고만큼 성공").isEqualTo(stock);
         }
 
-        cleanUp(jdbcTemplate);
+        cleanUp(jdbcTemplate, redisTemplate);
         return result;
     }
 

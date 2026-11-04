@@ -8,6 +8,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.couponrush.coupon.issue.redis.RedisCouponStock;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
@@ -34,17 +36,19 @@ class CouponIssueConcurrencyTest {
     @Autowired CouponRepository couponRepository;
     @Autowired CouponIssueRepository couponIssueRepository;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired StringRedisTemplate redisTemplate;
+    @Autowired RedisCouponStock redisStock;
 
     @AfterEach
     void tearDown() {
-        cleanUp(jdbcTemplate);
+        cleanUp(jdbcTemplate, redisTemplate);
     }
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(IssueStrategy.class)
     void 재고_100개에_1000명이_동시에_요청해도_정확히_100명만_발급된다(IssueStrategy strategy) throws Exception {
         CouponIssuer issuer = issuer(issuers, strategy);
-        Coupon coupon = saveOpenCoupon(couponRepository, TOTAL_QUANTITY);
+        Coupon coupon = saveOpenCoupon(couponRepository, redisStock, TOTAL_QUANTITY);
         List<Long> userIds = createUsers(jdbcTemplate, REQUEST_COUNT);
 
         Result result = runConcurrently(userIds.stream()
@@ -65,7 +69,7 @@ class CouponIssueConcurrencyTest {
     @EnumSource(IssueStrategy.class)
     void 같은_사용자가_동시에_10번_요청해도_1번만_발급되고_나머지는_이미_발급됨으로_응답한다(IssueStrategy strategy) throws Exception {
         CouponIssuer issuer = issuer(issuers, strategy);
-        Coupon coupon = saveOpenCoupon(couponRepository, TOTAL_QUANTITY);
+        Coupon coupon = saveOpenCoupon(couponRepository, redisStock, TOTAL_QUANTITY);
         Long userId = createUsers(jdbcTemplate, 1).get(0);
 
         Result result = runConcurrently(IntStream.range(0, 10)

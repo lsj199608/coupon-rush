@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 쿠폰 발급 진입점. 동시성 제어 방식(CouponIssuer)은 설정으로 고른다 — 기본은 조건부 UPDATE.
+ * 쿠폰 발급 진입점. 동시성 제어 방식(CouponIssuer)은 설정으로 고른다 — 기본은 REDIS.
  * 쿠폰 발급 핵심 경로에는 LLM 호출 등 외부 호출을 절대 넣지 않는다 (CLAUDE.md 규칙).
  * 방식별 비교: docs/concurrency-notes.md
  */
