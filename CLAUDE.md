@@ -18,7 +18,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - backend/ : Spring Boot 프로젝트
 - frontend/ : React 프로젝트
 - infra/ : docker-compose.yml 등 인프라 설정
-- docs/ : 설계/실험 기록 (concurrency-report.md: 동시성 재현·해결 리포트, 단계마다 결과 추가)
+- docs/ : 설계/실험 기록 (concurrency-notes.md: 동시성 재현·해결 리포트, 단계마다 결과 추가)
 
 ## 규칙
 - 한 번에 한 기능만 구현하고, 구현 후 테스트 코드를 함께 작성한다.
@@ -43,10 +43,14 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - [x] 2. 소셜 로그인 + JWT
   - 카카오/네이버/구글 로그인, Flyway 도입, Access(30m)+Refresh(14d, Redis), refresh/logout API,
     로그아웃 블랙리스트, JWT 인증 필터, /api/users/me
-- [x] 3. 쿠폰 발급 API (DB 기반)
-  - 순진한 구현으로 초과 발급 재현(재고 100 → 907 발급) → 조건부 UPDATE 로 수정 (docs/concurrency-report.md)
+- [x] 3. 쿠폰 발급 API (DB 기반) — 상세: docs/concurrency-notes.md
+  - 쿠폰 생성/조회/발급/내 쿠폰 API, V2(coupons, coupon_issues), V3(coupons.version)
+  - 순진한 구현으로 초과 발급 재현: 재고 100 / 1000명 → 907건 발급 (lost update)
+  - DB 락 3방식 구현 + 비교 (CouponIssuer 전략, 기본 조건부 UPDATE). 재고 100 / 1000명은 세 방식 모두 정확히 100건.
+    최대 경합(재고 1000 / 1000명) 평균: 조건부 UPDATE 2,413ms / 비관적 락 5,143ms / 낙관적 락 12,815ms(충돌 5,221회)
+  - 결론: 선착순(경합 극심)에는 조건부 UPDATE. 공통 한계는 DB 한 행 직렬화 + 커넥션 풀 점유 → 4단계 Redis
 - [ ] 4. Redis로 재고 차감 개선 + 동시성 테스트  ← 다음 작업
-  - CouponIssueConcurrencyTest 같은 시나리오로 DB 방식과 비교, 리포트에 결과 추가
+  - IssueStrategy 에 REDIS 방식 추가 → CouponIssueConcurrencyTest/benchmark 에 자동 포함, 리포트에 결과 추가
   - HTTP 부하 테스트(k6 등)로 DB vs Redis 처리량 비교 예정 (테스트 회원/토큰 생성 스크립트 필요)
 - [ ] 5. Kafka 비동기 처리
 - [ ] 6. React 화면 연동
@@ -107,11 +111,18 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 ### 쿠폰
 - API: GET /api/coupons/{id}(공개), POST /api/coupons/{id}/issue, GET /api/users/me/coupons,
   POST /api/admin/coupons(ROLE_ADMIN). 발급자는 토큰에서만 꺼낸다 (바디로 userId 받지 않음).
-- 발급(CouponIssueService.issue): exists 빠른 실패 → 조건부 UPDATE(issued < total, 기간 내) → INSERT.
-  재고 차감은 엔티티 메서드(dirty checking)로 하지 않는다 (lost update). 중복 발급 최종 판정은
-  uk_coupon_issues_coupon_user 유니크 제약 → COUPON_ALREADY_ISSUED 로 변환, 롤백으로 차감도 취소.
+- 발급 방식은 coupon/issue/ 의 CouponIssuer 구현체 (CONDITIONAL_UPDATE 기본, PESSIMISTIC_LOCK, OPTIMISTIC_LOCK).
+  CouponIssueService가 app.coupon.issue.strategy(환경변수 COUPON_ISSUE_STRATEGY)로 골라 위임한다.
+  공통 검증/저장(exists 빠른 실패, 기간·소진 검사, 유니크 위반 → COUPON_ALREADY_ISSUED)은 CouponIssueSupport.
+  새 방식 = IssueStrategy 값 + CouponIssuer 구현체 (테스트·benchmark는 enum 기준으로 자동 포함).
+- 트랜잭션은 각 CouponIssuer가 직접 관리한다. CouponIssueService.issue는 @Transactional이 아니다
+  (낙관적 락은 재시도마다 TransactionTemplate으로 새 트랜잭션을 연다. 바깥 트랜잭션 안에서 호출하면 예외).
+- Coupon.increaseIssuedQuantity()(메모리 +1)는 비관적 락(FOR UPDATE) 또는 @Version으로 보호될 때만 쓴다.
+  단독 사용 = 3단계 순진한 구현(lost update). 조건부 UPDATE는 version도 함께 올린다 (방식이 섞여도 충돌 감지).
+- 중복 발급 최종 판정은 uk_coupon_issues_coupon_user 유니크 제약, 예외로 롤백되며 차감도 취소.
+  낙관적 락이 재시도(기본 100회)를 넘기면 COUPON_ISSUE_CONFLICT(409).
 - 엔티티 Atomic 필드, @Transactional + synchronized, 인메모리 AtomicInteger는 해결책이 아니다
-  (요청마다 엔티티 객체가 다름 / 커밋 전에 락 해제 / 서버 여러 대에서 깨짐). 이유는 docs/concurrency-report.md.
+  (요청마다 엔티티 객체가 다름 / 커밋 전에 락 해제 / 서버 여러 대에서 깨짐). 이유는 docs/concurrency-notes.md.
 - CouponIssue는 Coupon/User를 @ManyToOne 없이 ID로만 참조 (발급 경로 단순화, 4~5단계 쓰기 경로 교체 대비).
 - 발급 기간은 [issueStartAt, issueEndAt) — 시작 포함, 종료 미포함.
 
@@ -119,6 +130,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - 전체 테스트: `cd backend; .\gradlew test`
 - 동시성 테스트만: `.\gradlew test --tests "com.couponrush.coupon.CouponIssueConcurrencyTest" --rerun`
   → 결과 숫자: `build\reports\tests\test\classes\com.couponrush.coupon.CouponIssueConcurrencyTest.html` 의 Standard output
+- 방식별 성능 비교: `.\gradlew benchmark` (@Tag("benchmark"), 기본 test에서 제외, 약 3~4분)
+  → `build\benchmark\coupon-issue-strategies.md`
+- 실제 서버에서 방식 바꾸기: `.env`에 `COUPON_ISSUE_STRATEGY=pessimistic-lock` 등 → bootRun 재시작
 - curl은 `curl.exe`로 (PowerShell 5.1의 curl은 Invoke-WebRequest 별칭). JSON 바디는 파일로:
   `[IO.File]::WriteAllText("$PWD\body.json", $json)` 후 `--data-binary "@body.json"`
 - 로컬 관리자 만들기: `UPDATE users SET role='ADMIN' WHERE id=?;` → `/api/auth/refresh`로 새 access token (role은 DB에서 다시 읽음)

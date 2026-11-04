@@ -44,5 +44,19 @@ dependencies {
 }
 
 tasks.named('test') {
-	useJUnitPlatform()
+	useJUnitPlatform {
+		excludeTags 'benchmark'   // 시간이 오래 걸리는 성능 비교는 ./gradlew benchmark 로 따로
+	}
+}
+
+// 동시성 제어 방식별 소요 시간 비교. 결과: build/benchmark/coupon-issue-strategies.md
+tasks.register('benchmark', Test) {
+	description = '쿠폰 발급 동시성 제어 방식별 성능 비교 (@Tag("benchmark"))'
+	group = 'verification'
+	testClassesDirs = sourceSets.test.output.classesDirs
+	classpath = sourceSets.test.runtimeClasspath
+	useJUnitPlatform {
+		includeTags 'benchmark'
+	}
+	outputs.upToDateWhen { false }   // 측정은 매번 다시
 }

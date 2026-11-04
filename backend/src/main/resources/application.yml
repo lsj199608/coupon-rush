@@ -80,6 +80,11 @@ app:
   oauth2:
     # 로그인 성공/실패 후 돌아갈 프론트엔드 주소 (비밀값이 아니라 기본값 허용)
     redirect-uri: ${FRONTEND_OAUTH2_REDIRECT_URI:http://localhost:5173/oauth/callback}
+  coupon:
+    issue:
+      # 재고 동시성 제어 방식: conditional-update(기본) | pessimistic-lock | optimistic-lock
+      strategy: ${COUPON_ISSUE_STRATEGY:conditional-update}
+      optimistic-max-attempts: 100
   auth:
     cookie:
       # refresh token 쿠키의 Secure 속성. 로컬(http)에서는 false, HTTPS 배포 시 true
