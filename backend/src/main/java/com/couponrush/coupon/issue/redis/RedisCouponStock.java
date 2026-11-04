@@ -16,6 +16,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Redis 에 있는 쿠폰 재고. 모든 상태 변경은 Lua 스크립트로 원자적으로 한다.
@@ -24,7 +26,8 @@ import java.util.Optional;
  *  - event:{couponId}:stock   남은 재고
  *  - event:{couponId}:issued  발급받은 userId Set
  *  - event:{couponId}:meta    발급 기간 (start, end epoch millis) — 발급 경로에서 DB 를 읽지 않기 위해
- * 만료: 발급 종료 + 7일
+ *  - event:{couponId}:restored 보상(복구)한 requestId Set — 이중 복구 방지 + 취소된 요청을 컨슈머가 발급하지 않게
+ * 만료: 발급 종료 + 7일 (restored 는 재적재해도 지우지 않는다 — Kafka 에 남은 취소 요청 메시지가 있을 수 있어서)
  */
 @Component
 public class RedisCouponStock {
@@ -85,12 +88,23 @@ public class RedisCouponStock {
     }
 
     /**
-     * 보상: Redis 에서 SUCCESS 였지만 DB 저장이 실패했을 때 재고를 되돌린다.
+     * 보상: Redis 에서 SUCCESS 였지만 DB 저장(또는 Kafka 발행)이 실패했을 때 재고를 되돌린다. 멱등.
+     * 같은 restoreId 로 여러 번 불려도 재고는 한 번만 늘어난다 — 비동기 발급은 requestId 를 넘겨서
+     * "발행 실패 보상"과 "컨슈머 실패/DLT 보상"이 같은 요청에 겹쳐도 이중 복구되지 않게 한다.
+     *
      * @param removeUser true 면 발급 Set 에서도 제거 (DB 에 발급 이력이 없는 경우)
+     * @return true = 이번에 복구함, false = 이미 복구된 요청
      */
-    public void restore(Long couponId, Long userId, boolean removeUser) {
-        redisTemplate.execute(RESTORE_SCRIPT, keys(couponId).subList(0, 2),
-                String.valueOf(userId), removeUser ? "1" : "0");
+    public boolean restore(Long couponId, Long userId, boolean removeUser, String restoreId) {
+        Long result = redisTemplate.execute(RESTORE_SCRIPT,
+                List.of(stockKey(couponId), issuedKey(couponId), restoredKey(couponId)),
+                String.valueOf(userId), removeUser ? "1" : "0", restoreId);
+        return result != null && result == 1L;
+    }
+
+    /** 이 요청이 이미 보상(취소)되었는가 — 컨슈머가 "발행 실패로 취소된 요청"을 발급하지 않게 확인한다 */
+    public boolean isRestored(Long couponId, String restoreId) {
+        return Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(restoredKey(couponId), restoreId));
     }
 
     public Optional<Integer> getStock(Long couponId) {
@@ -100,6 +114,23 @@ public class RedisCouponStock {
     public long getIssuedCount(Long couponId) {
         Long size = redisTemplate.opsForSet().size(issuedKey(couponId));
         return size == null ? 0 : size;
+    }
+
+    /** 대조 점검용. 이벤트 규모(수만 명)까지는 한 번에 읽어도 된다 — 더 커지면 SSCAN 으로 나눠 읽는다 */
+    public Set<Long> getIssuedUserIds(Long couponId) {
+        Set<String> members = redisTemplate.opsForSet().members(issuedKey(couponId));
+        if (members == null) {
+            return Set.of();
+        }
+        return members.stream().map(Long::valueOf).collect(Collectors.toSet());
+    }
+
+    public boolean isLoaded(Long couponId) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(stockKey(couponId)));
+    }
+
+    public static String restoredKey(Long couponId) {
+        return "event:{" + couponId + "}:restored";
     }
 
     private static List<String> keys(Long couponId) {

@@ -15,6 +15,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * [Redis] 재고 판정을 Redis Lua 스크립트로 하고, SUCCESS 일 때만 DB 에 저장한다.
@@ -35,14 +36,16 @@ public class RedisCouponIssuer implements CouponIssuer {
     private final CouponRepository couponRepository;
     private final CouponIssueSupport support;
     private final TransactionTemplate transactionTemplate;
+    private final RedisIssueRejections rejections;
     private final Clock clock;
 
     public RedisCouponIssuer(RedisCouponStock stock, CouponRepository couponRepository, CouponIssueSupport support,
-                             PlatformTransactionManager transactionManager, Clock clock) {
+                             PlatformTransactionManager transactionManager, RedisIssueRejections rejections, Clock clock) {
         this.stock = stock;
         this.couponRepository = couponRepository;
         this.support = support;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.rejections = rejections;
         this.clock = clock;
     }
 
@@ -55,16 +58,11 @@ public class RedisCouponIssuer implements CouponIssuer {
     public CouponIssue issue(Long couponId, Long userId) {
         Instant now = clock.instant();
 
-        switch (stock.tryIssue(couponId, userId, now)) {
-            case SUCCESS -> {
-                return persistOrCompensate(couponId, userId, now);
-            }
-            case DUPLICATE -> throw new BusinessException(ErrorCode.COUPON_ALREADY_ISSUED);
-            case SOLD_OUT -> throw new BusinessException(ErrorCode.COUPON_SOLD_OUT);
-            case NOT_IN_PERIOD -> throw new BusinessException(ErrorCode.COUPON_NOT_IN_PERIOD);
-            case NOT_READY -> throw notReadyReason(couponId, now);
+        RedisIssueResult result = stock.tryIssue(couponId, userId, now);
+        if (result != RedisIssueResult.SUCCESS) {
+            throw rejections.toException(result, couponId, now);
         }
-        throw new IllegalStateException("알 수 없는 Redis 발급 결과");
+        return persistOrCompensate(couponId, userId, now);
     }
 
     private CouponIssue persistOrCompensate(Long couponId, Long userId, Instant now) {
@@ -93,20 +91,11 @@ public class RedisCouponIssuer implements CouponIssuer {
 
     private void compensate(Long couponId, Long userId, boolean removeUser) {
         try {
-            stock.restore(couponId, userId, removeUser);
+            stock.restore(couponId, userId, removeUser, "sync-" + UUID.randomUUID());   // 동기 경로는 이 자리에서 한 번만 복구
         } catch (RuntimeException e) {
             // 보상까지 실패하면 Redis 재고가 실제보다 1 적어진다 (초과 발급이 아니라 덜 발급되는 쪽 → 안전한 방향)
             // POST /api/admin/coupons/{id}/stock/sync 로 DB 기준 재동기화한다
             log.error("Redis 재고 보상 실패: couponId={}, userId={} — 재동기화 필요", couponId, userId, e);
         }
-    }
-
-    /** 재고가 적재되지 않은 경우: DB 로 이유를 구분한다 (실패 경로에서만 DB 조회) */
-    private BusinessException notReadyReason(Long couponId, Instant now) {
-        return couponRepository.findById(couponId)
-                .map(coupon -> coupon.isInIssuePeriod(now)
-                        ? new BusinessException(ErrorCode.COUPON_STOCK_NOT_READY)
-                        : new BusinessException(ErrorCode.COUPON_NOT_IN_PERIOD))
-                .orElseGet(() -> new BusinessException(ErrorCode.COUPON_NOT_FOUND));
     }
 }

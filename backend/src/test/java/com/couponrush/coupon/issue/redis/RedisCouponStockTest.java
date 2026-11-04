@@ -94,7 +94,7 @@ class RedisCouponStockTest {
         stock.load(coupon(1, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))), List.of());
         stock.tryIssue(COUPON_ID, 1L, now);
 
-        stock.restore(COUPON_ID, 1L, true);
+        stock.restore(COUPON_ID, 1L, true, "req-1");
 
         assertThat(stock.getStock(COUPON_ID)).contains(1);
         assertThat(stock.getIssuedCount(COUPON_ID)).isZero();
@@ -102,8 +102,60 @@ class RedisCouponStockTest {
     }
 
     @Test
+    void 같은_restoreId_로_여러_번_보상해도_재고는_한_번만_늘어난다() {
+        stock.load(coupon(5, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))), List.of());
+        stock.tryIssue(COUPON_ID, 1L, now);   // 재고 4
+
+        boolean first = stock.restore(COUPON_ID, 1L, true, "req-1");
+        boolean second = stock.restore(COUPON_ID, 1L, true, "req-1");   // 발행 실패 보상 + DLT 보상이 겹친 상황
+        boolean third = stock.restore(COUPON_ID, 1L, false, "req-1");
+
+        assertThat(first).isTrue();
+        assertThat(second).isFalse();
+        assertThat(third).isFalse();
+        assertThat(stock.getStock(COUPON_ID)).as("한 번만 복구").contains(5);
+        assertThat(stock.isRestored(COUPON_ID, "req-1")).isTrue();
+        assertThat(stock.isRestored(COUPON_ID, "req-2")).isFalse();
+    }
+
+    @Test
+    void 다른_요청의_보상은_각각_반영된다() {
+        stock.load(coupon(5, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))), List.of());
+        stock.tryIssue(COUPON_ID, 1L, now);
+        stock.tryIssue(COUPON_ID, 2L, now);   // 재고 3
+
+        stock.restore(COUPON_ID, 1L, true, "req-1");
+        stock.restore(COUPON_ID, 2L, true, "req-2");
+
+        assertThat(stock.getStock(COUPON_ID)).contains(5);
+        assertThat(stock.getIssuedCount(COUPON_ID)).isZero();
+    }
+
+    @Test
+    void 복구_기록에도_재고_키와_같은_만료가_붙는다() {
+        stock.load(coupon(5, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))), List.of());
+        stock.tryIssue(COUPON_ID, 1L, now);
+
+        stock.restore(COUPON_ID, 1L, true, "req-1");
+
+        assertThat(redisTemplate.getExpire(RedisCouponStock.restoredKey(COUPON_ID), TimeUnit.SECONDS)).isPositive();
+    }
+
+    @Test
+    void 재적재해도_복구_기록은_남는다_Kafka_에_남은_취소_요청_대비() {
+        Coupon coupon = coupon(5, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        stock.load(coupon, List.of());
+        stock.tryIssue(COUPON_ID, 1L, now);
+        stock.restore(COUPON_ID, 1L, true, "req-1");
+
+        stock.load(coupon, List.of());
+
+        assertThat(stock.isRestored(COUPON_ID, "req-1")).isTrue();
+    }
+
+    @Test
     void 키가_없으면_보상해도_재고_키를_새로_만들지_않는다() {
-        stock.restore(COUPON_ID, 1L, true);
+        stock.restore(COUPON_ID, 1L, true, "req-1");
 
         assertThat(redisTemplate.hasKey("event:{777}:stock")).isFalse();
     }

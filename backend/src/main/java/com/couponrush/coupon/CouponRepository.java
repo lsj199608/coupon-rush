@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 public interface CouponRepository extends JpaRepository<Coupon, Long> {
@@ -40,4 +41,7 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT c FROM Coupon c WHERE c.id = :couponId")
     Optional<Coupon> findByIdForUpdate(@Param("couponId") Long couponId);
+
+    /** 대조 점검용: 기간 안에 종료된 이벤트 */
+    List<Coupon> findByIssueEndAtBetween(Instant from, Instant to);
 }

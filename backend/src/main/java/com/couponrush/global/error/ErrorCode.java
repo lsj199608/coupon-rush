@@ -31,7 +31,12 @@ public enum ErrorCode {
     /** 낙관적 락 방식에서 재시도 횟수를 넘긴 경우 (재고는 남아 있을 수 있음) */
     COUPON_ISSUE_CONFLICT(HttpStatus.CONFLICT, "요청이 몰려 발급하지 못했습니다. 잠시 후 다시 시도해 주세요."),
     /** Redis 방식에서 재고가 적재되지 않은 경우 (관리자 재동기화 필요) */
-    COUPON_STOCK_NOT_READY(HttpStatus.SERVICE_UNAVAILABLE, "쿠폰 발급 준비 중입니다. 잠시 후 다시 시도해 주세요.");
+    COUPON_STOCK_NOT_READY(HttpStatus.SERVICE_UNAVAILABLE, "쿠폰 발급 준비 중입니다. 잠시 후 다시 시도해 주세요."),
+    /** 비동기 모드에서 Kafka 발행이 확정되지 않은 경우 (Redis 는 되돌림) */
+    COUPON_ISSUE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "발급 요청을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요."),
+
+    // 발급 요청 (비동기)
+    ISSUE_REQUEST_NOT_FOUND(HttpStatus.NOT_FOUND, "발급 요청을 찾을 수 없습니다.");
 
     private final HttpStatus status;
     private final String message;

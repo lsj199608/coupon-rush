@@ -4,6 +4,8 @@ import com.couponrush.coupon.issue.CouponIssuer;
 import com.couponrush.coupon.issue.IssueStrategy;
 import com.couponrush.coupon.issue.redis.RedisCouponStock;
 import com.couponrush.global.error.BusinessException;
+import org.awaitility.Awaitility;
+import org.awaitility.core.ConditionTimeoutException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -56,11 +58,27 @@ final class ConcurrencyTestSupport {
                 "SELECT id FROM users WHERE provider_id LIKE ? ORDER BY id", Long.class, prefix + "%");
     }
 
+    /**
+     * 테스트 데이터 정리. 비동기 발급 메시지가 남아 있으면 컨슈머가 다 처리할 때까지(PENDING 키가 없어질 때까지) 먼저 기다린다
+     * — 처리 중인 메시지가 다음 테스트의 데이터를 건드리지 않게.
+     */
     static void cleanUp(JdbcTemplate jdbcTemplate, StringRedisTemplate redisTemplate) {
+        awaitPendingDrained(redisTemplate);
+        jdbcTemplate.update("DELETE FROM issue_requests");
         jdbcTemplate.update("DELETE FROM coupon_issues");
         jdbcTemplate.update("DELETE FROM coupons");
         jdbcTemplate.update("DELETE FROM users");
         redisTemplate.delete(redisTemplate.keys("event:*"));
+        redisTemplate.delete(redisTemplate.keys("issue-request:*"));
+    }
+
+    static void awaitPendingDrained(StringRedisTemplate redisTemplate) {
+        try {
+            Awaitility.await().atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(100))
+                    .until(() -> redisTemplate.keys("issue-request:*").isEmpty());
+        } catch (ConditionTimeoutException e) {
+            // 컨슈머가 영구 실패한 메시지는 PENDING 으로 남는다 → 기다리지 않고 정리한다
+        }
     }
 
     /**

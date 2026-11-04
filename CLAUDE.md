@@ -55,8 +55,22 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - 1,000명 / 10,000명 / 중복 요청 모두 초과·중복 발급 0. 10,000명에서 Redis가 DB 락 방식보다 7~11배 빠름
   - 측정 중 Lua 스크립트 로딩 성능 버그 발견·수정, 보상 정합성 검증, 보상 불가능한 경우의 선택지 정리(미구현)
   - (선택) HTTP 부하 테스트(k6 등)로 처리량 비교 — 테스트 회원/토큰 생성 스크립트 필요
-- [ ] 5. Kafka 비동기 처리  ← 다음 작업 (Redis SUCCESS → 발급 이벤트 발행 → 컨슈머가 DB 저장/집계)
-- [ ] 6. React 화면 연동
+- [x] 5. Kafka 비동기 처리 — 설계·토픽·키·202 흐름·멱등/재시도/DLT·보상·한계·측정은 아래 "Kafka 비동기 발급 (5단계)" 섹션
+  - [x] 기본 파이프라인: Lua SUCCESS → PENDING(Redis) → Kafka(acks=all, idempotence, key=eventId, 파티션 3) → 202 + requestId
+        → 컨슈머가 CouponIssue + IssueRequest(COMPLETED/FAILED) 저장, GET /api/issue-requests/{id}. mode=async 기본, sync 유지
+  - 결과: 정확성 OK(재고 100/1000명, 1000/1000명 모두 초과·중복 0). 첫 측정(워밍업 없음)은 접수 3.4s, DB 반영 30s
+    → 워밍업 후 재측정은 아래 "성능 측정" 항목
+  - [x] 컨슈머 신뢰성: 멱등(유니크 위반 = 중복이면 정상), 지수 백오프 재시도(0.5s→1s→2s), DLT(coupon-issue-requests.DLT)
+        + DLT 컨슈머가 FAILED(RETRY_EXHAUSTED) + 보상, DB 저장 성공 후에만 오프셋 커밋 — 실제 DB 장애·실제 커밋 오프셋으로 검증
+  - [x] Redis ↔ DB 정합성(docs 6장): 보상 Lua 멱등화(restored Set, requestId 기준 1회), 발행 실패로 취소된 요청은 컨슈머가
+        발급하지 않음(PUBLISH_CANCELLED), 대조 점검(관리자 API + 10분 스케줄러, 불일치만 WARN), 남은 한계 문서화
+  - [x] 성능 측정(docs 7장, AsyncIssueBenchmarkTest, 워밍업 1회 후 1회 측정): 재고 1000 / 1000명 기준
+        응답 p99 동기 178ms → 비동기 27ms, 모든 응답 2.5s → 0.6s / DB 반영 완료 2.5s → 12.0s (컨슈머 건당 처리가 병목)
+        파티션·컨커런시: 이벤트 1개는 늘려도 그대로(키 = 쿠폰 ID → 한 파티션), 이벤트 6개 동시는 3/1 26s → 3/3 14s → 6/6 7.3s.
+        완료 시간은 가장 많이 몰린 파티션이 결정(해시 충돌 주의), 파티션당 약 50건/s
+  - 추가 개선 후보 (5단계 범위 밖, 필요할 때): **배치 컨슈머**(묶음 INSERT + issued_quantity +N + 커밋 1회 — 이벤트 1개의
+    DB 반영 속도를 올리는 유일한 방법), Lua 안 XADD/PENDING으로 유령 발급 구간 제거, 오래된 PENDING 대조 워커, PENDING 기록 1왕복화
+- [ ] 6. React 화면 연동  ← 다음 작업 (발급은 202 → GET /api/issue-requests/{id} 폴링으로 결과 표시)
 - [ ] 7. LLM 기능
 
 ## 결정 사항 / 메모
@@ -75,7 +89,10 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 ### 테스트
 - Testcontainers로 compose와 동일한 이미지를 띄워 검증한다 (Docker 실행 필요, 실행 중인 앱/로컬 DB와 무관).
 - 통합 테스트는 @IntegrationTest 메타 애너테이션 사용 (더미 비밀값 고정 + 컨텍스트 캐시 공유).
-- 테스트는 각자 만든 데이터를 @AfterEach에서 정리한다 (coupon_issues → coupons → users 순서, FK 때문. Redis는 event:*, refresh:*).
+- 테스트는 각자 만든 데이터를 @AfterEach에서 정리한다 (issue_requests → coupon_issues → coupons → users 순서, FK 때문.
+  Redis는 event:*, issue-request:*, refresh:*). 쿠폰 테스트는 ConcurrencyTestSupport.cleanUp 사용 —
+  컨슈머가 남은 메시지를 처리할 때까지(PENDING 키가 없어질 때까지, 최대 15초) 기다린 뒤 지운다.
+- 비동기 결과는 Awaitility로 기다린다 (Thread.sleep 금지, 단 "두 번째 메시지가 처리될 시간" 같은 부정 검증은 예외).
 - 쿠폰 테스트에서 쿠폰을 만들 때는 ConcurrencyTestSupport.saveAndLoad/saveOpenCoupon으로 Redis에도 적재한다
   (IssueStrategy 파라미터 테스트에 REDIS가 포함되므로).
 
@@ -153,6 +170,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 | `event:{couponId}:stock` | string | 남은 재고 |
 | `event:{couponId}:issued` | set | 발급받은 userId (첫 SADD 때 생성, 스크립트가 재고 키와 같은 TTL 부여) |
 | `event:{couponId}:meta` | hash | `start`, `end` (epoch ms) — 발급 경로에서 DB를 읽지 않기 위해 추가 |
+| `event:{couponId}:restored` | set | 보상(복구)한 requestId — 이중 복구 방지 + 취소된 요청 판별 (6장). 재적재해도 유지 |
+| `issue-request:{requestId}` | hash | 비동기 PENDING (couponId, userId, requestedAt), TTL 1일 (5장) |
 
 **3방식 성능 비교** (재고 100, 32스레드, 로컬 Windows + Docker Desktop, 같은 실행에서 측정, 모든 실행 초과·중복 발급 0)
 
@@ -181,13 +200,115 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 | **Lua 성공 직후 서버 종료** (보상 불가) | 유령 발급: 재고 -1, Set에 있지만 DB 없음 | **미구현**. 선택지: 대조 배치(ZSET 시각 필요) / pending + 워커 / Lua 안 XADD(Stream) / Kafka+아웃박스 / 사후 대조. 5단계 설계 시 C(Stream) vs B+D(pending+Kafka) 결정 |
 | DB 타임아웃 후 보상(실제로는 커밋됨) | 재고가 하나 더 풀림 | DB CHECK·조건부 UPDATE가 초과 발급을 최종 차단 |
 
+### Kafka 비동기 발급 (5단계, 기본 모드) — 상세: docs/concurrency-notes.md 5~7장
+코드: coupon/issue/async/ (AsyncCouponIssueRequester, CouponIssueEventConsumer, CouponIssueEventProcessor, CouponIssueKafkaConfig,
+CouponIssueConsumerProperties, CouponIssueConsumerMetrics), coupon/request/ (IssueRequest, PendingIssueRequestStore, 조회 API),
+coupon/reconcile/ (대조 점검), V4(issue_requests)
+
+**모드 전환**: app.coupon.issue.mode (COUPON_ISSUE_MODE) = async(기본, 202) | sync(201, strategy 사용, 4단계까지의 방식).
+CouponIssueService.request()가 분기하고, 결과는 IssueResult(Issued / Accepted) sealed 타입 → 컨트롤러가 201 / 202로 매핑.
+
+**토픽 구조**
+
+| 토픽 | 파티션 | 키 | 값 | 컨슈머 그룹 |
+|---|---|---|---|---|
+| `coupon-issue-requests` | app.kafka.topic.partitions (기본 3) | eventId(쿠폰 ID) | JSON `CouponIssueRequestedEvent(requestId, eventId, userId, requestedAt)` | `coupon-issue-consumer` (리스너 id `couponIssueListener`, concurrency 기본 3) |
+| `coupon-issue-requests.DLT` | 메인과 같은 수 (원본 파티션 번호로 보냄) | 원본 그대로 | 원본 + 예외 헤더(`kafka_dlt-exception-*`) | `coupon-issue-dlt-consumer` (전용 컨테이너, 2초 간격 무한 재시도) |
+
+- replicas = app.kafka.replicas (로컬 1, 운영 3 + min.insync.replicas=2). 파티션은 늘리기만 가능.
+- Producer: acks=all, enable.idempotence=true, max.in.flight ≤ 5, delivery.timeout 10s. 값은 ObjectMapper + StringSerializer(JSON 문자열).
+
+**파티션 키 = eventId(쿠폰 ID)**
+- 같은 쿠폰은 항상 같은 파티션 → 한 컨슈머 스레드가 순서대로 처리 → `coupons` 행 락 경합이 없다 (3~4단계의 병목 제거).
+- 대가: 이벤트 하나는 한 파티션·한 스레드에 몰림 → 파티션·스레드를 늘려도 **이벤트 하나는 빨라지지 않는다** (측정으로 확인).
+  여러 이벤트가 동시에 열리면 늘린 만큼 병렬. 파티션은 "동시에 열리는 이벤트 수"보다 넉넉히 (해시 충돌로 몰림).
+- userId 키는 부하는 고르지만 같은 쿠폰의 쓰기가 흩어져 행 락 경합이 돌아오고, 쿠폰별 순서도 사라져서 채택하지 않음.
+
+**202 흐름 (요청 경로에 DB 접근 없음)**
+1. Lua 판정 (4단계와 동일). 실패면 409 / 400 / 503을 바로 응답하고 Kafka에는 보내지 않는다.
+2. PENDING 기록 `issue-request:{requestId}` (TTL 1일, **발행 전에** — 컨슈머가 먼저 끝나도 순서가 뒤집히지 않게)
+3. Kafka 발행 후 **브로커 ack(acks=all)를 최대 5초 대기**
+4. 202 + `Location: /api/issue-requests/{requestId}`. 202 = "판정은 끝, DB 저장은 처리 중"(201은 리소스가 생겼다는 뜻이라 부적절)
+5. 발행 실패 / 타임아웃 → 보상(restoreId = requestId) + PENDING 삭제 + 503 COUPON_ISSUE_UNAVAILABLE
+- 상태 조회 GET /api/issue-requests/{id}: DB(COMPLETED/FAILED) → Redis(PENDING) → 404. 본인 것만 (남의 requestId는 존재 여부도 숨김).
+- issue_requests에는 최종 결과만 저장 (PENDING은 DB에 안 씀). user_id FK 없음 (회원 FK 위반 실패도 FAILED로 남기려고).
+
+**컨슈머: 멱등 / 재시도 / DLT / 커밋** (ack-mode=record, enable-auto-commit=false)
+- 처리 순서: ① 멱등 1차 — issue_requests에 requestId가 있으면 건너뜀 → ② 취소 확인 — isRestored(couponId, requestId)면 발급하지 않고
+  FAILED(PUBLISH_CANCELLED), 보상 안 함 → ③ 한 트랜잭션: coupon_issues INSERT → issued_quantity +1(기간 검사는 event.requestedAt 기준)
+  → issue_requests COMPLETED
+- 멱등 2차: 동시 처리로 ①을 함께 통과하면 coupon_issues 유니크 / issue_requests PK 위반 → 같은 requestId 결과가 있으면
+  "중복"으로 정상 종료 (FAILED·보상 금지). 없으면 다른 요청의 발급 → FAILED(COUPON_ALREADY_ISSUED)
+- 영구 실패(FK, DB 중복, 재고 불일치): **FAILED 먼저 기록 → 그다음 Redis 보상** (반대 순서면 재처리 시 초과 발급 위험)
+- 일시 실패: 지수 백오프(app.kafka.consumer.retry: 3회, 0.5s ×2, 상한 5s). 재시도 중엔 같은 파티션도 대기(쿠폰별 순서 유지).
+  소진 → DLT 발행. 역직렬화 실패(InvalidCouponIssueMessageException)는 재시도 없이 바로 DLT.
+- DLT 컨슈머: 결과가 이미 있으면 건너뜀, 없으면 FAILED(RETRY_EXHAUSTED) → 보상 → PENDING 삭제. DB가 죽어 있으면 복구될 때까지 재시도.
+- 오프셋: 리스너가 정상 반환한 뒤에만 커밋 = DB 커밋 성공 후. 예외면 커밋 없이 되감아 재시도, DLT 발행에 성공해야 오프셋을 넘김. 처리 전 커밋 금지.
+- 메인 CommonErrorHandler Bean은 하나여야 Boot가 기본 컨테이너에 자동 적용한다 (DLT용 핸들러는 Bean으로 만들지 않음).
+- 지표 CouponIssueConsumerMetrics: failedDeliveries(실패한 시도, 최초 포함: 재시도 3회면 4), dltPublished, duplicatesSkipped.
+  Spring Kafka RetryListener.failedDelivery는 "실패할 때마다" 호출된다 (재시도 횟수 아님).
+- FAILED 사유: DATA_INTEGRITY_VIOLATION / COUPON_ALREADY_ISSUED / STOCK_MISMATCH / RETRY_EXHAUSTED / PUBLISH_CANCELLED
+
+**보상 로직 (멱등)**
+- RedisCouponStock.restore(couponId, userId, removeUser, restoreId). Lua가 `event:{id}:restored`에 restoreId를 먼저 SADD하고, 처음일 때만 INCR + SREM.
+  비동기는 restoreId = requestId → 발행 실패 / 컨슈머 실패 / DLT 어느 경로든 같은 요청은 **한 번만** 복구. 동기 경로는 "sync-" + UUID.
+- removeUser=false는 DB에 이미 이력이 있는 경우(유니크 위반) — 재고만 되돌리고 Set에는 남김.
+- restored는 재적재(load)해도 지우지 않는다 (Kafka에 남은 취소 요청 메시지 대비).
+- 보상 실패는 "덜 발급"되는 방향(안전) → 로그 + 대조 점검으로 감지.
+
+**대조 점검**: CouponStockReconciler — 불변식(남은 재고 + DB 발급 = 총 수량, Set = DB 사용자, 카운터 = 행) 위반만 WARN 로그, 수정하지 않음.
+GET /api/admin/coupons/{id}/reconciliation, 스케줄러(app.coupon.reconcile.*, 10분, 종료 후 1분~7일 이벤트). 테스트에서는 꺼 둔다.
+
+**남은 한계** (docs 6-4, 초과 발급은 어떤 경우에도 DB 제약이 최종 차단)
+
+| 상황 | 결과 | 지금 |
+|---|---|---|
+| Lua 성공 직후, 발행 전에 서버 종료 | 유령 발급 (재고 -1, Set에 있음, DB·Kafka 없음) | 감지만 (대조 점검 "Redis에만 있는 사용자"). 근본 해결은 Lua 안 XADD / PENDING 워커 |
+| 발행 타임아웃인데 실제로는 기록 + 컨슈머가 보상보다 먼저 처리 | 503인데 쿠폰 있음, Redis 재고 1 과다 | 감지만 ("DB에만 있는 사용자") |
+| 보상 Lua 실패 | 덜 발급 | 로그 + 대조 점검 |
+| 이벤트 하나의 DB 반영 속도 | 파티션당 약 50건/s (건당 처리) | 배치 컨슈머로 개선 예정 |
+| 스케줄러를 여러 서버에서 실행 | 중복 실행(읽기 전용) | 운영 시 ShedLock |
+
+**측정 결과** (AsyncIssueBenchmarkTest, 32스레드, Testcontainers, 로컬 Windows + Docker Desktop, 워밍업 1회 후 1회 측정, 정합성 매회 확인)
+
+| 시나리오 | 방식 | 응답 p50 / p99 | 모든 응답 반환 | DB 반영 완료 |
+|---|---|---|---:|---:|
+| 재고 100 / 1,000명 | 동기 Redis | 5 / 195 ms | 527 ms | 527 ms |
+| | Kafka 비동기 | 4 / 38 ms | 209 ms | 1,961 ms |
+| 재고 100 / 10,000명 | 동기 Redis | 3 / 25 ms | 1,494 ms | 1,494 ms |
+| | Kafka 비동기 | 4 / 18 ms | 1,494 ms | 2,292 ms |
+| 재고 1,000 / 1,000명 | 동기 Redis | 72 / 178 ms | 2,508 ms | 2,508 ms |
+| | Kafka 비동기 | **19 / 27 ms** | **620 ms** | 12,023 ms |
+
+| 파티션 / 스레드 | 이벤트 1개 (1,000건) | 이벤트 6개 동시 (1,200건) |
+|---|---:|---:|
+| 3 / 1 | 20.0 s | 26.3 s |
+| 3 / 3 | 14.6 s | 14.3 s |
+| 6 / 6 | 16.2 s | **7.3 s** |
+
+- 비동기는 사용자 응답(특히 p95 이상 꼬리)을 크게 줄이지만, DB 반영 완료는 건당 처리 때문에 동기보다 느리다.
+- 파티션·스레드는 이벤트가 여러 개일 때만 효과가 있다. 완료 시간은 메시지가 가장 많이 몰린 파티션이 결정한다.
+
+**테스트 메모**: DB 장애는 `ALTER TABLE issue_requests RENAME TO issue_requests_broken`으로 흉내 낸다
+(CouponIssueConsumerReliabilityTest, @AfterEach에서 항상 복구). 커밋 오프셋은 AdminClient.listConsumerGroupOffsets로 확인.
+
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 전체 테스트: `cd backend; .\gradlew test`
 - 동시성 테스트만: `.\gradlew test --tests "com.couponrush.coupon.CouponIssueConcurrencyTest" --rerun`
   → 결과 숫자: `build\reports\tests\test\classes\com.couponrush.coupon.CouponIssueConcurrencyTest.html` 의 Standard output
-- 방식별 성능 비교: `.\gradlew benchmark` (@Tag("benchmark"), 기본 test에서 제외, 약 8분)
-  → `build\benchmark\coupon-issue-strategies.md` (재고 100/1000), `build\benchmark\coupon-issue-scale.md` (1k/10k/중복 요청)
-- 실제 서버에서 방식 바꾸기: `.env`에 `COUPON_ISSUE_STRATEGY=redis` 등 → bootRun 재시작
+- 방식별 성능 비교: `.\gradlew benchmark` (@Tag("benchmark"), 기본 test에서 제외, 전체 약 12분)
+  → `build\benchmark\coupon-issue-strategies.md` (재고 100/1000), `build\benchmark\coupon-issue-scale.md` (1k/10k/중복 요청),
+    `build\benchmark\coupon-issue-async.md` (동기 vs 비동기 응답/완료 시간, 파티션·컨커런시 — 약 4분)
+  하나만: `.\gradlew benchmark --tests "com.couponrush.coupon.AsyncIssueBenchmarkTest"`
+  ⚠ AsyncIssueBenchmarkTest는 테스트용 브로커의 토픽 파티션을 6으로 늘린다 (benchmark JVM 안에서만, 컨테이너는 실행마다 새로 뜸)
+- 동기/비동기 바꾸기: `.env`에 `COUPON_ISSUE_MODE=sync` (기본 async) → bootRun 재시작
+- Kafka 토픽/컨슈머 보기:
+  `docker exec coupon-rush-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic coupon-issue-requests`
+  `docker exec coupon-rush-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group coupon-issue-consumer`
+  (CURRENT-OFFSET = 커밋된 오프셋, LAG = 아직 처리·커밋 안 된 메시지 수)
+- DLT 메시지 보기:
+  `docker exec coupon-rush-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic coupon-issue-requests.DLT --from-beginning --property print.headers=true --timeout-ms 5000`
+- 실제 서버에서 방식 바꾸기(sync 모드일 때): `.env`에 `COUPON_ISSUE_STRATEGY=redis` 등 → bootRun 재시작
   (진행 중인 쿠폰은 바꾼 뒤 `POST /api/admin/coupons/{id}/stock/sync`)
 - Redis 재고 보기: `docker exec coupon-rush-redis redis-cli GET "event:{1}:stock"` / `SCARD "event:{1}:issued"`
 - 기본 방식이 REDIS라서, Redis 적재 기능 이전(4단계 전)에 만든 로컬 쿠폰은 발급 시 503 → `POST /api/admin/coupons/{id}/stock/sync` 한 번

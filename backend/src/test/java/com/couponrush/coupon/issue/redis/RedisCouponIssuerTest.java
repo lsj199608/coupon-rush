@@ -40,6 +40,7 @@ class RedisCouponIssuerTest {
 
     @AfterEach
     void tearDown() {
+        jdbcTemplate.update("DELETE FROM issue_requests");
         jdbcTemplate.update("DELETE FROM coupon_issues");
         jdbcTemplate.update("DELETE FROM coupons");
         jdbcTemplate.update("DELETE FROM users");

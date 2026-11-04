@@ -59,11 +59,8 @@ class CouponApiTest {
 
     @AfterEach
     void tearDown() {
-        jdbcTemplate.update("DELETE FROM coupon_issues");
-        jdbcTemplate.update("DELETE FROM coupons");
-        jdbcTemplate.update("DELETE FROM users");
+        ConcurrencyTestSupport.cleanUp(jdbcTemplate, redisTemplate);   // 비동기 처리가 끝날 때까지 기다린 뒤 정리
         redisTemplate.delete(redisTemplate.keys("refresh:*"));
-        redisTemplate.delete(redisTemplate.keys("event:*"));
     }
 
     @Nested
@@ -180,13 +177,23 @@ class CouponApiTest {
         }
 
         @Test
-        void 발급하면_201_이고_남은수량이_줄고_내_쿠폰에_보인다() throws Exception {
+        void 발급하면_202_와_requestId_를_받고_처리가_끝나면_COMPLETED_이고_내_쿠폰에_보인다() throws Exception {
             Coupon coupon = openCoupon(5);
 
-            issue(coupon.getId(), userToken)
-                    .andExpect(status().isCreated())
+            String body = issue(coupon.getId(), userToken)
+                    .andExpect(status().isAccepted())
+                    .andExpect(header().string(HttpHeaders.LOCATION, org.hamcrest.Matchers.startsWith("/api/issue-requests/")))
                     .andExpect(jsonPath("$.couponId").value(coupon.getId()))
-                    .andExpect(jsonPath("$.issueId").isNumber());
+                    .andExpect(jsonPath("$.status").value("PENDING"))
+                    .andReturn().getResponse().getContentAsString();
+            String requestId = objectMapper.readTree(body).get("requestId").asText();
+
+            // 컨슈머가 DB 에 저장할 때까지 기다린다
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(15)).untilAsserted(() ->
+                    mockMvc.perform(get("/api/issue-requests/{id}", requestId).header(HttpHeaders.AUTHORIZATION, "Bearer " + userToken))
+                            .andExpect(status().isOk())
+                            .andExpect(jsonPath("$.status").value("COMPLETED"))
+                            .andExpect(jsonPath("$.couponIssueId").isNumber()));
 
             mockMvc.perform(get("/api/coupons/{id}", coupon.getId()))
                     .andExpect(jsonPath("$.issuedQuantity").value(1))
@@ -201,7 +208,7 @@ class CouponApiTest {
         @Test
         void 두_번째_요청은_409_COUPON_ALREADY_ISSUED() throws Exception {
             Coupon coupon = openCoupon(5);
-            issue(coupon.getId(), userToken).andExpect(status().isCreated());
+            issue(coupon.getId(), userToken).andExpect(status().isAccepted());
 
             issue(coupon.getId(), userToken)
                     .andExpect(status().isConflict())
@@ -211,7 +218,7 @@ class CouponApiTest {
         @Test
         void 소진되면_409_COUPON_SOLD_OUT() throws Exception {
             Coupon coupon = openCoupon(1);
-            issue(coupon.getId(), adminToken).andExpect(status().isCreated());
+            issue(coupon.getId(), adminToken).andExpect(status().isAccepted());
 
             issue(coupon.getId(), userToken)
                     .andExpect(status().isConflict())
@@ -241,7 +248,7 @@ class CouponApiTest {
                             .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
                     .andExpect(status().isOk());
 
-            issue(coupon.getId(), userToken).andExpect(status().isCreated());
+            issue(coupon.getId(), userToken).andExpect(status().isAccepted());
         }
     }
 

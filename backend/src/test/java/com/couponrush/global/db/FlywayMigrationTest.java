@@ -48,6 +48,12 @@ class FlywayMigrationTest {
     }
 
     @Test
+    void 발급요청_status_CHECK_제약이_IssueRequestStatus_enum_값과_일치한다() {
+        assertThat(allowedValues("ck_issue_requests_status"))
+                .containsExactlyInAnyOrderElementsOf(names(com.couponrush.coupon.request.IssueRequestStatus.values()));
+    }
+
+    @Test
     void 허용되지_않은_provider_는_DB_가_거부한다() {
         assertThatThrownBy(() -> jdbcTemplate.update("""
                 INSERT INTO users (provider, provider_id, nickname, role, created_at, updated_at)
