@@ -34,7 +34,7 @@ public class AdminCouponController {
     public ResponseEntity<CouponResponse> create(@Valid @RequestBody CouponCreateRequest request) {
         Coupon coupon = couponService.create(request);
         return ResponseEntity.created(URI.create("/api/coupons/" + coupon.getId()))
-                .body(CouponResponse.from(coupon));
+                .body(couponService.getDetail(coupon.getId()));
     }
 
     /**

@@ -35,7 +35,7 @@ class OAuth2LoginHandlerTest {
             new AuthCookieProperties(false));
 
     @Test
-    void 로그인_성공시_access_는_fragment_로_refresh_는_HttpOnly_쿠키로_전달하고_세션을_정리한다() throws Exception {
+    void 로그인_성공시_URL_에는_토큰_없이_리다이렉트하고_refresh_는_HttpOnly_쿠키로_전달하고_세션을_정리한다() throws Exception {
         AuthService authService = mock(AuthService.class);
         given(authService.login(10L, Role.USER)).willReturn(new LoginTokens("ACCESS.TOKEN", "REFRESH.TOKEN"));
         OAuth2LoginSuccessHandler handler = new OAuth2LoginSuccessHandler(authService, refreshTokenCookie, redirectProperties);
@@ -48,7 +48,8 @@ class OAuth2LoginHandlerTest {
 
         handler.onAuthenticationSuccess(request, response, new TestingAuthenticationToken(principal, null));
 
-        assertThat(response.getRedirectedUrl()).isEqualTo(FRONT_URL + "#accessToken=ACCESS.TOKEN");
+        assertThat(response.getRedirectedUrl()).isEqualTo(FRONT_URL);
+        assertThat(response.getRedirectedUrl()).as("access token 은 URL 에 싣지 않는다 (방문 기록·주소창 노출 방지)").doesNotContain("ACCESS.TOKEN");
 
         String setCookie = response.getHeader(HttpHeaders.SET_COOKIE);
         assertThat(setCookie)

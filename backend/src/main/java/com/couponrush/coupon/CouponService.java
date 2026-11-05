@@ -1,30 +1,63 @@
 package com.couponrush.coupon;
 
 import com.couponrush.coupon.dto.CouponCreateRequest;
+import com.couponrush.coupon.dto.CouponResponse;
 import com.couponrush.coupon.dto.CouponStockResponse;
 import com.couponrush.coupon.issue.redis.RedisCouponStock;
 import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /** 쿠폰 생성/조회/재고 적재 (발급은 CouponIssueService) */
 @Service
 public class CouponService {
 
+    /** 목록은 최근 이벤트만 (페이지네이션은 이벤트가 많아지면) */
+    private static final int LIST_LIMIT = 50;
+
     private final CouponRepository couponRepository;
     private final CouponIssueRepository couponIssueRepository;
     private final RedisCouponStock redisCouponStock;
+    private final Clock clock;
 
     public CouponService(CouponRepository couponRepository, CouponIssueRepository couponIssueRepository,
-                         RedisCouponStock redisCouponStock) {
+                         RedisCouponStock redisCouponStock, Clock clock) {
         this.couponRepository = couponRepository;
         this.couponIssueRepository = couponIssueRepository;
         this.redisCouponStock = redisCouponStock;
+        this.clock = clock;
+    }
+
+    /** 이벤트 상세 (공개). 남은 수량은 Redis 재고 기준 */
+    @Transactional(readOnly = true)
+    public CouponResponse getDetail(Long couponId) {
+        Coupon coupon = get(couponId);
+        return CouponResponse.of(coupon, redisCouponStock.getStock(couponId).orElse(null), clock.instant());
+    }
+
+    /**
+     * 이벤트 목록 (공개). 오픈 시각 최신순 50개.
+     * 남은 수량은 Redis 재고를 MGET 한 번으로 모아 읽는다 (이벤트마다 왕복하지 않게).
+     */
+    @Transactional(readOnly = true)
+    public List<CouponResponse> list() {
+        List<Coupon> coupons = couponRepository.findAll(
+                PageRequest.of(0, LIST_LIMIT, Sort.by(Sort.Direction.DESC, "issueStartAt", "id"))).getContent();
+        Map<Long, Integer> stocks = redisCouponStock.getStocks(coupons.stream().map(Coupon::getId).toList());
+        Instant now = clock.instant();
+        return coupons.stream()
+                .map(coupon -> CouponResponse.of(coupon, stocks.get(coupon.getId()), now))
+                .toList();
     }
 
     /**

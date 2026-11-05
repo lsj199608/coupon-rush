@@ -14,7 +14,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -109,6 +111,22 @@ public class RedisCouponStock {
 
     public Optional<Integer> getStock(Long couponId) {
         return Optional.ofNullable(redisTemplate.opsForValue().get(stockKey(couponId))).map(Integer::valueOf);
+    }
+
+    /** 여러 쿠폰의 남은 재고를 MGET 한 번으로. 적재되지 않은 쿠폰은 결과에서 빠진다 */
+    public Map<Long, Integer> getStocks(List<Long> couponIds) {
+        if (couponIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> values = redisTemplate.opsForValue().multiGet(couponIds.stream().map(RedisCouponStock::stockKey).toList());
+        Map<Long, Integer> stocks = new HashMap<>();
+        for (int i = 0; i < couponIds.size(); i++) {
+            String value = values == null ? null : values.get(i);
+            if (value != null) {
+                stocks.put(couponIds.get(i), Integer.valueOf(value));
+            }
+        }
+        return stocks;
     }
 
     public long getIssuedCount(Long couponId) {

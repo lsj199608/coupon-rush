@@ -30,10 +30,16 @@ public class CouponController {
         this.couponIssueService = couponIssueService;
     }
 
-    /** 쿠폰 정보 + 남은 수량. 이벤트 페이지에서 로그인 전에도 볼 수 있게 공개 */
+    /** 이벤트(쿠폰) 목록 — 상태(UPCOMING/OPEN/ENDED)와 남은 수량 포함. 로그인 전에도 볼 수 있게 공개 */
+    @GetMapping("/api/coupons")
+    public List<CouponResponse> list() {
+        return couponService.list();
+    }
+
+    /** 쿠폰 정보 + 남은 수량 + 상태 + 서버 시각. 이벤트 페이지에서 로그인 전에도 볼 수 있게 공개 */
     @GetMapping("/api/coupons/{couponId}")
     public CouponResponse get(@PathVariable Long couponId) {
-        return CouponResponse.from(couponService.get(couponId));
+        return couponService.getDetail(couponId);
     }
 
     /**

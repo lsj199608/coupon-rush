@@ -64,7 +64,7 @@ public class SecurityConfig {
                         // access token 이 만료된 상태에서 호출하는 API 라 인증 없이 허용 (refresh token 쿠키로 검증)
                         .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
                         // 쿠폰 정보(남은 수량)는 로그인 전에도 이벤트 페이지에서 볼 수 있게 공개
-                        .requestMatchers(HttpMethod.GET, "/api/coupons/*").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/coupons", "/api/coupons/*").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2Login(oauth2 -> oauth2

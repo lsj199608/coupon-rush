@@ -24,6 +24,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - 한 번에 한 기능만 구현하고, 구현 후 테스트 코드를 함께 작성한다.
 - 쿠폰 발급 핵심 경로에는 LLM 호출을 절대 넣지 않는다.
 - 비밀키, Client Secret은 코드에 넣지 않고 환경변수(.env)로 관리한다. .env는 .gitignore에 포함한다.
+  새 환경변수를 추가하면 infra/.env.example과 README.md 환경변수 표도 함께 갱신한다.
 - 코드 변경 시 왜 그렇게 설계했는지 간단히 설명해준다.
 - 소셜 로그인은 OAuth2UserInfo 추상화로 제공자 차이를 흡수한다.
 
@@ -70,7 +71,14 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         완료 시간은 가장 많이 몰린 파티션이 결정(해시 충돌 주의), 파티션당 약 50건/s
   - 추가 개선 후보 (5단계 범위 밖, 필요할 때): **배치 컨슈머**(묶음 INSERT + issued_quantity +N + 커밋 1회 — 이벤트 1개의
     DB 반영 속도를 올리는 유일한 방법), Lua 안 XADD/PENDING으로 유령 발급 구간 제거, 오래된 PENDING 대조 워커, PENDING 기록 1왕복화
-- [ ] 6. React 화면 연동  ← 다음 작업 (발급은 202 → GET /api/issue-requests/{id} 폴링으로 결과 표시)
+- [ ] 6. React 화면 연동  ← 진행 중 — 아래 "프론트엔드 (6단계)" 섹션
+  - [x] 프로젝트 세팅 + 로그인: Vite + React + TS, React Router, TanStack Query, axios. Vite 프록시(/api, /oauth2, /login/oauth2 → 8080)
+        카카오/네이버/구글 로그인, AuthContext + ProtectedRoute, 헤더(닉네임·로그아웃), axios 인터셉터(Bearer 첨부, 401 → refresh → 재시도)
+        백엔드: 로그인 성공 리다이렉트에서 access token 제거(URL에 토큰 없음) → 프론트가 refresh 쿠키로 access 획득
+  - [x] 이벤트 목록(상태 뱃지) / 상세(기간·남은 수량·서버 시각 기준 카운트다운) / 발급(202 → 1초 폴링, 결과별 UI) / 내 쿠폰
+        백엔드: GET /api/coupons 목록 추가, 응답에 status·serverTime, 남은 수량은 Redis 기준
+  - [x] 관리자 이벤트 생성 폼(검증 + 생성 직후 Redis 재고 적재 확인), 모바일 반응형, 에러 바운더리, 404, 주요 흐름 테스트
+  - [ ] 남은 것: 실제 브라우저 수동 확인(로그인·발급·모바일 폭) 후 6단계 완료 표시, (선택) Playwright E2E
 - [ ] 7. LLM 기능
 
 ## 결정 사항 / 메모
@@ -116,12 +124,15 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - 콜백 URL: http://localhost:8080/login/oauth2/code/{kakao|naver|google} (각 콘솔에 등록)
 
 ### 인증 (JWT)
-- Security: 기본은 전부 인증 필요. 공개 경로는 /actuator/health, POST /api/auth/refresh, GET /api/coupons/*.
+- Security: 기본은 전부 인증 필요. 공개 경로는 /actuator/health, POST /api/auth/refresh, GET /api/coupons, GET /api/coupons/*.
   /api/admin/**는 ROLE_ADMIN. stateless, CSRF/폼로그인 off (OAuth2 state 보관에만 세션 잠깐 사용).
 - JWT에는 userId(sub), token_type(access|refresh), jti만 담고 access에만 role 추가. 개인정보는 넣지 않는다.
   token_type으로 refresh를 Bearer로 쓰는 것(또는 반대)을 막는다.
-- 토큰 전달: access는 URL fragment(#accessToken=) → 프론트 메모리 보관,
-  refresh는 HttpOnly 쿠키(refresh_token, Path=/api/auth, SameSite=Strict, Secure는 AUTH_COOKIE_SECURE).
+- 토큰 전달 (6단계에서 변경): **URL에는 토큰을 싣지 않는다.** 로그인 성공 시 refresh만 HttpOnly 쿠키로 심고
+  프론트 콜백(/oauth/callback)으로 리다이렉트 → 프론트가 POST /api/auth/refresh로 access를 받아 **메모리에만** 둔다.
+  (예전 방식 #accessToken= fragment는 방문 기록·주소창·페이지의 모든 스크립트에 노출돼서 제거. 새로고침 복원도 같은 refresh 호출)
+  로그인 실패는 #error=login_failed (에러 코드만).
+  refresh 쿠키: refresh_token, HttpOnly, Path=/api/auth, SameSite=Strict, Secure는 AUTH_COOKIE_SECURE.
   배포 시 프론트/백엔드가 다른 사이트면 SameSite=None + Secure로 바꿔야 한다.
 - Redis 키: refresh:{userId} → SHA-256(refresh token), TTL 14d (사용자당 1개, 재로그인 시 이전 기기 무효)
   blacklist:{jti} → 로그아웃된 access token, TTL = 남은 유효시간. JwtAuthenticationFilter가 매 요청 확인.
@@ -131,8 +142,12 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - JwtAuthenticationFilter는 @Component로 등록하지 않는다 (서블릿 필터 자동 등록으로 두 번 실행되는 것 방지).
 
 ### 쿠폰
-- API: GET /api/coupons/{id}(공개), POST /api/coupons/{id}/issue, GET /api/users/me/coupons,
+- API: GET /api/coupons(목록, 공개), GET /api/coupons/{id}(공개), POST /api/coupons/{id}/issue, GET /api/users/me/coupons,
   POST /api/admin/coupons(ROLE_ADMIN). 발급자는 토큰에서만 꺼낸다 (바디로 userId 받지 않음).
+  화면 용어 "이벤트" = 백엔드 coupons 한 행 (API 경로는 /api/coupons 유지).
+- 조회 응답(CouponResponse)에 status(UPCOMING/OPEN/ENDED, 서버 Clock 기준)와 serverTime 포함.
+  remainingQuantity는 Redis 재고 우선(판정 기준, 비동기 모드에서 DB 카운터는 컨슈머만큼 늦음), 없으면 DB.
+  목록은 오픈 시각 최신순 50개, Redis 재고는 MGET 한 번(RedisCouponStock.getStocks).
 - 발급 방식은 coupon/issue/ 의 CouponIssuer 구현체 (REDIS 기본, CONDITIONAL_UPDATE, PESSIMISTIC_LOCK, OPTIMISTIC_LOCK).
   CouponIssueService가 app.coupon.issue.strategy(환경변수 COUPON_ISSUE_STRATEGY)로 골라 위임한다.
   공통 검증/저장(exists 빠른 실패, 기간·소진 검사, 유니크 위반 → COUPON_ALREADY_ISSUED)은 CouponIssueSupport.
@@ -292,7 +307,120 @@ GET /api/admin/coupons/{id}/reconciliation, 스케줄러(app.coupon.reconcile.*,
 **테스트 메모**: DB 장애는 `ALTER TABLE issue_requests RENAME TO issue_requests_broken`으로 흉내 낸다
 (CouponIssueConsumerReliabilityTest, @AfterEach에서 항상 복구). 커밋 오프셋은 AdminClient.listConsumerGroupOffsets로 확인.
 
+### 프론트엔드 (6단계)
+frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/react-query 5, axios. 버전은 package.json에 고정.
+
+**코드 구조** (src/)
+
+| 폴더 | 내용 |
+|---|---|
+| api/ | axios 호출·응답 타입(coupons, admin, auth), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
+| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents |
+| components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary |
+| pages/ | EventList, EventDetail, MyCoupons, AdminEventCreate, Login, OAuthCallback, NotFound |
+| auth/ | AuthContext(세션 상태), ProtectedRoute(로그인 필요), AdminRoute(ADMIN 필요) |
+| utils/ | format(날짜·카운트다운), eventForm(관리자 폼 검증·변환) |
+
+- **서버 데이터는 TanStack Query로만** (useState에 서버 응답을 복사하지 않는다). 키는 api/queryKeys.ts에서만 만든다.
+  로딩·에러·빈 상태는 components/QueryState로 통일 (에러 문구 + [다시 시도] = refetch).
+- **에러 메시지는 api/errors.ts에서만** — 백엔드 ErrorCode / FAILED 사유와 1:1. isFinalRejection(소진·이미 발급·기간 아님·없음)은 재시도 버튼 없음.
+
+#### 화면 흐름
+
+| 경로 (src/routes.ts) | 화면 | 접근 | API |
+|---|---|---|---|
+| `/` | 이벤트 목록 (상태 뱃지 오픈 전/진행 중/종료, 남은 수량) | 공개 | GET /api/coupons |
+| `/events/:id` | 상세: 기간·남은 수량·카운트다운·[발급 받기] | 공개 (발급만 로그인) | GET /api/coupons/{id} (3초마다), POST .../issue, GET /api/issue-requests/{id} |
+| `/me/coupons` | 내 쿠폰 | 로그인 | GET /api/users/me/coupons |
+| `/admin/events/new` | 이벤트 생성 폼 + Redis 재고 적재 확인 | ADMIN | POST /api/admin/coupons, GET .../reconciliation |
+| `/login` | 카카오·네이버·구글 버튼 | 공개 | (페이지 이동) /oauth2/authorization/{provider} |
+| `/oauth/callback` | 로그인 완료 처리 후 원래 화면으로 | 공개 | POST /api/auth/refresh |
+| 그 외 | NotFoundPage (없는 이벤트·/events/abc 포함) | 공개 | — |
+
+```
+목록 → 상세 ─[발급 받기]─ 비로그인 → /login (state.from 기억) → 제공자 → /oauth/callback → 상세로 복귀
+                        └ 로그인 → 202 → 폴링 → 완료 → [내 쿠폰 보기]
+```
+- 헤더: 이벤트 / 내 쿠폰(로그인 시) / 이벤트 만들기(ADMIN) 메뉴, 닉네임 + 로그아웃 또는 로그인 링크.
+- ProtectedRoute: 세션 복원 중(loading)에는 "확인 중"을 보여 주고 기다린다 (새로고침 때 로그인 화면으로 깜빡 튕기지 않게).
+  AdminRoute는 화면 숨김용일 뿐, 실제 권한 검사는 백엔드(/api/admin/** = ROLE_ADMIN).
+- 에러: API 에러는 Query error 상태 → QueryState / 화면별 안내. 렌더링 예외는 ErrorBoundary
+  (App 안: resetKey=pathname으로 이동하면 복구, main.tsx 바깥: 최후 안전망). 없는 이벤트(404)는 재시도하지 않고 NotFoundPage.
+- 관리자 폼(utils/eventForm): 검증은 백엔드 CouponCreateRequest와 같게 (이름 1~100자, 수량 정수 1~1,000,000, 시작 < 종료)
+  + 종료가 이미 지났으면 막음. 첫 제출 전에는 에러를 띄우지 않고, 제출 후에는 입력마다 재검증. datetime-local(PC 시간대) → toISOString(UTC).
+  서버 400 INVALID_INPUT은 서버 message(필드별 사유)를 그대로 표시(errors.formErrorMessageOf). 생성 후 대조 API로 Redis 적재 확인(없으면 stock/sync 안내).
+- 반응형: 600px 이하에서 gutter 16px, 헤더 줄바꿈(로고 첫 줄), 상세의 발급 버튼은 화면 하단 sticky(safe-area 포함),
+  입력 글자 16px(iOS 확대 방지), 긴 이름 overflow-wrap: anywhere, 카운트다운 tabular-nums.
+
+#### 인증 토큰 처리 방식과 이유
+
+| 토큰 | 어디에 | 누가 다루나 | 이유 |
+|---|---|---|---|
+| access (30분) | **JS 메모리 변수**(api/tokenStore.ts)에만 | axios 인터셉터가 `Authorization: Bearer` 첨부 | localStorage·sessionStorage는 XSS 스크립트가 읽을 수 있다. 메모리는 새로고침하면 사라지지만 refresh로 다시 받으면 된다 |
+| refresh (14일) | **HttpOnly 쿠키** `refresh_token` (Path=/api/auth, SameSite=Strict) | 브라우저만 (JS가 읽을 수 없음) | 탈취되면 오래 쓰이는 토큰이라 스크립트 접근 자체를 막는다. Path로 /api/auth 요청에만 실리고, SameSite=Strict로 다른 사이트발 요청(CSRF)에는 안 실린다 |
+
+- **URL에 토큰을 싣지 않는다** (6단계에서 변경). 예전 `#accessToken=` fragment는 방문 기록·주소창·페이지의 모든 스크립트에 노출됐다.
+  지금은 백엔드가 로그인 성공 시 refresh 쿠키만 심고 `/oauth/callback`으로 보낸다 → 프론트가 POST /api/auth/refresh로 access를 받는다.
+  로그인 실패는 `#error=login_failed` (에러 코드만).
+- **로그인 흐름**: [카카오로 로그인] → (location.assign) /oauth2/authorization/kakao → 제공자 → 8080 /login/oauth2/code/kakao
+  → 백엔드가 회원 저장 + refresh 쿠키 → 5173/oauth/callback → refresh → access(메모리) → GET /api/users/me → 원래 화면.
+  돌아갈 경로는 sessionStorage(coupon-rush:return-to)에 저장 (토큰이 아니라 경로만).
+- **세션 복원**: 새로고침하면 메모리 access가 사라지므로 AuthProvider가 앱 시작 시 POST /api/auth/refresh 1회 → 성공하면 GET /api/users/me(['me']).
+  상태: loading(복원 중) / authenticated / anonymous. refresh는 됐는데 /me가 실패해도 anonymous.
+- **axios 인터셉터**(api/client.ts): 401이면 refresh 후 원래 요청을 **한 번만** 재시도(_retried).
+  refresh는 **single-flight** — 동시 401 여러 개, StrictMode 이중 effect, 콜백 페이지와 앱 시작 복원이 겹쳐도 refresh 요청은 1번.
+  /api/auth/* 자체의 401은 재발급하지 않음(무한 루프 방지). refresh 실패 → 토큰 삭제 + tokenStore.notifySessionExpired()
+  → AuthContext가 anonymous로 → ProtectedRoute가 /login으로.
+- 로그아웃: POST /api/auth/logout(서버가 refresh 삭제·쿠키 만료·access 블랙리스트) → 실패해도 메모리 토큰과 Query 캐시는 지운다.
+- **같은 출처 + 프록시**: 개발 서버 5173이 /api, /oauth2, /login/oauth2를 8080으로 프록시 → 브라우저에겐 전부 localhost:5173
+  → CORS 설정 불필요, SameSite=Strict 쿠키도 그대로 실린다. axios는 baseURL 없이 상대 경로. 백엔드에 CORS 설정을 추가하지 않는다
+  (배포 때도 같은 도메인 + 리버스 프록시로 같은 구조 유지. 다른 사이트로 나누면 SameSite=None + Secure + CORS가 필요해진다).
+- **프록시 규칙은 경로 앞부분 일치라 화면 경로와 겹치면 안 된다.** '/login' 전체를 넘겼더니 로그인 화면을 새로고침할 때 백엔드의 401 JSON이 보였다
+  → 실제로 쓰는 /login/oauth2(OAuth 콜백)만 넘긴다. 화면 경로는 src/routes.ts(ROUTES)에 모으고 src/routes.test.ts가 겹침을 검사한다.
+- /oauth2, /login/oauth2 프록시는 **changeOrigin: true** — Spring이 Host로 redirect_uri를 만들기 때문에 8080이 되어야 콘솔 등록 주소와 일치
+  (false면 redirect_uri가 5173이 되어 "등록되지 않은 redirect_uri" 오류). 쿠키는 포트를 구분하지 않아서(localhost) 5173의 refresh 요청에도 실린다.
+
+#### 발급 폴링 구조 (hooks/useIssueCoupon)
+```
+[발급 받기] ─ useMutation: POST /api/coupons/{id}/issue
+   ├─ 409/400/503 → rejected(code)      즉시 거절 (Redis 판정). 소진·이미 발급·기간 아님은 재시도 버튼 없음
+   ├─ 201 (sync 모드) → completed       폴링 없음
+   └─ 202 + requestId → pending
+         └─ useQuery(['issue-requests', id]) refetchInterval:
+              PENDING(또는 첫 응답 전) → 1초 후 다시 / COMPLETED·FAILED → false (중단)
+              ├─ COMPLETED → completed  → ['events'], ['my-coupons'] 무효화
+              ├─ FAILED    → failed(reason)  DB 저장 실패, Redis는 보상됨 → 다시 시도 가능 (COUPON_ALREADY_ISSUED 사유는 제외)
+              ├─ 30초 동안 PENDING → timeout   폴링 중단 + "내 쿠폰에서 확인" (서버는 계속 처리 중일 수 있어 재시도 버튼 없음)
+              └─ 조회 자체 실패(재시도 2회 후) → lost
+```
+- 폴링을 고른 이유: 결과는 보통 수백 ms~수 초 안에 나오고 한 사람당 한 번이라 1초 폴링으로 충분 (SSE/WebSocket은 연결 유지 비용·인프라가 더 든다).
+  대규모 트래픽에서는 간격 백오프나 푸시로 바꾸는 것이 개선 후보.
+- 상태는 서버 데이터(mutation + query)에서 **계산**한다 — 별도 useState로 결과를 복사하지 않는다. 화면 상태는 requestId, timedOut, inFlight뿐.
+- 중복 클릭 방지: useRef(inFlight)로 렌더링 전 연타까지 막고(isPending은 다음 렌더에서야 바뀜), 버튼은 submitting/pending/최종 결과에서 disabled.
+- 타임아웃 타이머는 202를 받은 순간부터 잰다 (의존성은 "끝났는지"만 — pollStatus로 두면 첫 응답 때 타이머가 다시 시작되는 버그가 있었다).
+- 간격·타임아웃은 ISSUE_POLLING 객체 (화면 테스트에서 짧게 바꿈).
+- **오픈 시각**: useServerNow(serverTime)로 서버-PC 시계 차이를 보정한 "지금"을 1초마다 계산 → statusAt(event, now)로 상태를 다시 계산해
+  카운트다운과 버튼 활성화를 서버 시각에 맞춘다 (PC 시계가 틀려도 됨, 최종 판정은 서버). 상세는 3초마다 다시 조회(남은 수량), 0이면 누르기 전부터 "소진".
+
+#### 실행 방법
+1. `cd infra; docker compose up -d` (Postgres 5432, Redis 6379, Kafka 9092)
+2. `cd backend; .\gradlew bootRun` → 8080 (infra/.env를 읽음)
+3. `cd frontend; npm install; npm run dev` → http://localhost:5173 (프론트는 환경변수 없음, 프록시 대상은 vite.config.ts의 BACKEND)
+- 테스트 / 빌드: `npm test` / `npm run build` (tsc 타입 검사 + vite build). 자세한 순서·환경변수는 README.md.
+
+#### 테스트 메모
+- Vitest + Testing Library + jsdom. client.test.ts는 axios-mock-adapter로 인터셉터 검증.
+  AuthFlow / EventPages / AdminPages / AppShell(에러 바운더리·404)은 api 모듈을 vi.mock으로 대체 (test/renderApp.tsx: Provider 구성 + apiError 헬퍼).
+- routes.test.ts는 node 환경(esbuild가 jsdom에서 안 돎).
+- hooks/useIssueCoupon.test.tsx는 가짜 시계로 실제 값(1초 간격·30초 타임아웃) 검증. 가짜 시계에서는 TanStack Query의 notifyManager
+  (setTimeout 0 배치)가 밀려 캐시는 바뀌었는데 리렌더가 안 되므로 notifyManager.setScheduler(cb => cb())로 바꾸고 afterEach에서 되돌린다.
+- React는 자식 effect를 부모보다 먼저 실행한다 (콜백 페이지의 refresh가 AuthProvider 복원보다 먼저 호출됨).
+  실제로는 single-flight라 같은 결과를 공유하지만, mock으로 호출 순서별 응답을 다르게 주면 테스트가 엇갈린다.
+- 실제 소셜 로그인(제공자 화면)은 자동 테스트하지 않는다 — 수동 확인.
+
 ## 자주 쓰는 명령 (PowerShell 기준)
+- 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)
+- 프론트 테스트 / 빌드: `npm test` / `npm run build` (tsc 타입 검사 + vite build)
 - 전체 테스트: `cd backend; .\gradlew test`
 - 동시성 테스트만: `.\gradlew test --tests "com.couponrush.coupon.CouponIssueConcurrencyTest" --rerun`
   → 결과 숫자: `build\reports\tests\test\classes\com.couponrush.coupon.CouponIssueConcurrencyTest.html` 의 Standard output
@@ -322,7 +450,8 @@ GET /api/admin/coupons/{id}/reconciliation, 스케줄러(app.coupon.reconcile.*,
 ## 새 PC에서 시작하기
 1. Java 21, Docker Desktop, Git 설치 (Gradle은 gradlew가 받음)
 2. git clone https://github.com/lsj199608/coupon-rush.git
-3. infra/.env.example → infra/.env 복사 후 값 채우기 (.env는 git에 없음)
+3. infra/.env.example → infra/.env 복사 후 값 채우기 (.env는 git에 없음, 변수 설명은 README.md "환경변수")
 4. git config --global user.name / user.email 설정
 5. 확인: cd infra && docker compose up -d → cd ../backend && ./gradlew test
+   프론트: Node.js 20 이상 설치 → cd frontend && npm install && npm test
 6. 기존 로컬 DB가 Flyway 도입 전 것이면 위 "DB / Flyway" 메모대로 정리
