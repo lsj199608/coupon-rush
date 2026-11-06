@@ -17,6 +17,8 @@ Redis(원자적 재고 차감), Kafka(비동기 발급), 소셜 로그인(카카
                                                                           ├─ PostgreSQL :5432
                                                                           ├─ Redis      :6379
                                                                           └─ Kafka      :9092
+                                                                               │ llm-requests / llm-results
+                                                                   llm-service :8081 (LLM 호출 전담, 공개 API 없음)
 ```
 
 ## 준비물
@@ -67,6 +69,18 @@ cd backend
 - `backend/`는 Gradle 멀티모듈 루트입니다. `:coupon-api:bootRun`은 `backend/coupon-api` 폴더에서 실행되어 `../../infra/.env`를 읽습니다. **명령은 `backend/` 폴더에서** 입력합니다.
 - 처음 기동할 때 Flyway가 스키마를 만들고, Kafka 토픽(`coupon-issue-requests`, `.DLT`)이 자동으로 생깁니다.
 - 확인: `curl.exe http://localhost:8080/actuator/health` → `{"status":"UP"}`
+
+### 2-1. (선택) LLM 서비스: llm-service (8081)
+
+관리자 **이벤트 문구 생성**을 쓸 때만 띄웁니다. 없어도 다른 기능은 모두 동작하고, 문구 생성 요청만 60초 뒤 실패(TIMEOUT)합니다.
+지금은 **fake 제공자**(API 키·비용 없음, 입력으로 정해진 문구 3개)로만 동작합니다.
+
+```powershell
+cd backend
+.\gradlew :llm-service:bootRun      # 다른 터미널에서. coupon-api 와 같은 infra/.env 를 읽음
+```
+
+- 공개 API가 없습니다. coupon-api와 Kafka(`llm-requests` → `llm-results`)로만 통신하고, 8081은 헬스체크(`/actuator/health`)용입니다.
 
 ### 3. 프론트엔드: Vite (5173)
 
@@ -164,7 +178,9 @@ cd backend;  .\gradlew :coupon-api:benchmark   # (선택) 방식별 성능 측�
 
 ```
 backend/   Gradle 멀티모듈 루트
-  coupon-api/   Spring Boot (com.couponrush.{auth, user, coupon, global}), Flyway 마이그레이션, Lua 스크립트
+  coupon-api/   Spring Boot (com.couponrush.{auth, user, coupon, llm, global}), Flyway 마이그레이션, Lua 스크립트
+  llm-service/  LLM 호출 전담 Spring Boot (Kafka 컨슈머, DB 없음)
+  libs/llm-contract/  두 서비스가 주고받는 Kafka 메시지 계약
 frontend/  React (src/{api, hooks, components, pages, auth, utils})
 infra/     docker-compose.yml, .env.example
 docs/      동시성·Redis·Kafka 설계와 측정 기록

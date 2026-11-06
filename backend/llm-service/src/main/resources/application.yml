@@ -1,0 +1,56 @@
+spring:
+  application:
+    name: llm-service
+  # 로컬: coupon-api 와 같은 infra/.env 를 읽는다 (작업 폴더 backend/llm-service 기준). 없으면 무시.
+  # compose 에서는 .env 를 통째로 넘기지 않고 이 서비스에 필요한 변수만 environment 로 넘긴다 (JWT·OAuth 비밀값은 받지 않음)
+  config:
+    import: optional:file:../../infra/.env[.properties]
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+        delivery.timeout.ms: 15000
+        request.timeout.ms: 5000
+    consumer:
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        # 한 번에 1건만 가져온다 — LLM 호출이 길어서 여러 건을 가져오면 뒤의 건이 앞의 호출만큼 기다린다
+        max.poll.records: 1
+        # LLM 호출(최대 30초 × 재시도) 동안 poll 이 멈춰도 리밸런스되지 않게 (기본 5분 → 같은 메시지 중복 처리·중복 비용 방지)
+        max.poll.interval.ms: 300000
+    listener:
+      ack-mode: record   # 결과 발행 확정 후에만 오프셋 커밋
+
+server:
+  port: 8081   # actuator 헬스체크용 (공개 API 없음). coupon-api 8080 과 겹치지 않게
+
+app:
+  kafka:
+    replicas: ${KAFKA_TOPIC_REPLICAS:1}
+    topic:
+      partitions: ${KAFKA_TOPIC_PARTITIONS:3}
+  llm:
+    consumer:
+      concurrency: 2        # = 동시에 LLM 을 부르는 최대 수
+    result-retention: 1d    # 처리 기록(llm:done) 보관 — 재전달돼도 LLM 을 다시 부르지 않음
+    publish-timeout: 10s
+    fake:
+      delay: 0ms            # fake 응답 지연 (로컬에서 폴링·타임아웃 화면 확인용)
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-components: always

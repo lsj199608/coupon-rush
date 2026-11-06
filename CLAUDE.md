@@ -87,7 +87,10 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - [x] 1) 메시지 계약 모듈 :llm-contract (폴더 libs/llm-contract, com.couponrush.llm.contract) — 아래 "LLM 메시지 계약" 메모
   - [x] 2) coupon-api 쪽 (com.couponrush.llm): V5 llm_requests, POST /api/admin/llm/event-copy(202), GET /api/admin/llm/requests/{id},
         결과 컨슈머(전용 그룹·컨테이너), 타임아웃(조회 시 즉시 + 30초 스케줄러), 레이트 리밋 Lua — 아래 "LLM 요청 (coupon-api)" 메모
-  - [ ] 3) llm-service 뼈대 + fake
+  - [x] 3) llm-service 뼈대 + fake 제공자 (com.couponrush.llmservice) — 아래 "llm-service" 메모.
+        실제 실행 확인: bootRun 2개 + curl로 202 → PENDING → 약 1초 후 COMPLETED(후보 3개),
+        llm-service를 끄면 60초 후 TIMEOUT(그동안 GET /api/coupons 정상), 다시 켜면 남은 요청을 "마감 지남"으로 건너뜀(LLM 호출 0)
+  - [ ] 다음:
         4) 실제 LLM(Spring AI) + 타임아웃·재시도·서킷  5) 캐시·토큰 예산  6) V6 description  7) 프론트  8) compose·문서
 
 ## 결정 사항 / 메모
@@ -477,9 +480,32 @@ llm-results 컨슈머 (그룹 coupon-api-llm-results, 리스너 llmResultListene
   LlmRequestApiTest가 결과 리스너의 그룹·컨테이너·에러 핸들러가 발급 리스너와 다른지 검사. 테스트 정리: llm_requests 행, llm:* 키.
 - 아직 없음: 일일 토큰 예산(5단계, llm-service가 판정·기록), coupons.description(6단계).
 
+### llm-service (7단계) — backend/llm-service, com.couponrush.llmservice, 포트 8081(헬스체크만)
+```
+llm-requests ─▶ LlmRequestConsumer (그룹 llm-service, concurrency 2 = 동시 LLM 호출 상한, max.poll.records 1)
+                  └▶ LlmRequestProcessor
+                       ① 모르는 schemaVersion → 건너뜀      ② llm:done:{id} 있으면 저장된 결과를 다시 발행 (LLM 0회)
+                       ③ 마감 지남 → 건너뜀 (결과 없음)       ④ llm:inflight:{id} SET NX 실패 → 다른 작업자 처리 중, 건너뜀
+                       ⑤ LlmClient 호출 → COMPLETED/FAILED 결과를 llm:done 에 저장 (TTL 1일) → 반환
+                  └▶ llm-results 발행 (ack 대기) → 반환 후 오프셋 커밋
+```
+- **LLM 실패는 예외가 아니라 FAILED 결과**로 (LlmCallException → 사유 그대로, 예상 못 한 RuntimeException → LLM_UNAVAILABLE).
+  예외를 올리면 Kafka 재시도가 LLM을 반복 호출 = 비용 반복.
+- Kafka 에러 핸들러(이 앱의 유일한 CommonErrorHandler Bean): 읽을 수 없는 메시지(InvalidLlmRequestException)는 재시도 없이 llm-requests.DLT,
+  Redis·결과 발행 일시 장애는 1s→2s→4s 후 DLT. 재처리돼도 ②에서 끝나 LLM은 다시 안 부른다.
+- 결과를 Redis(llm:done)에 저장한 **다음에** 발행 — 발행 실패 후 재처리가 LLM 재호출이 되지 않게. Kafka 오프셋만으로는 at-least-once라 부족.
+- max.poll.interval.ms 5분: LLM 호출이 길어 poll이 늦어지면 리밸런스 → 같은 메시지 중복 처리·중복 비용.
+- DB 없음, 사용자 JWT 없음, 공개 API 없음. 로컬 bootRun은 infra/.env 전체를 읽지만 쓰는 값은 Kafka·Redis(·4단계부터 LLM_*)뿐.
+- LlmClient: FakeLlmClient(@Component, 지금 유일한 구현) — 입력 → 톤별 고정 문구 3개(계약 길이로 자름), 토큰은 글자 수로 흉내.
+  app.llm.fake.delay로 응답 지연(로컬 화면 확인용). 4단계에서 Anthropic 구현 + 키 없으면 fake 자동 선택.
+- 테스트(LlmRequestFlowTest): Kafka·Redis 컨테이너만. coupon-api 대신 llm-requests 발행, llm-results 직접 읽기.
+  @MockitoSpyBean FakeLlmClient로 호출 횟수 검증 (재전달 1회, 만료·모르는 버전·처리 중·DLT는 0회).
+  "처리하지 않음" 검증은 같은 키(=같은 파티션)로 표시용 요청을 뒤에 보내 그 결과가 오면 앞의 것도 처리된 것으로 본다 (sleep 없이).
+
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)
 - 프론트 테스트 / 빌드: `npm test` / `npm run build` (tsc 타입 검사 + vite build)
+- llm-service 실행(선택, 문구 생성용): `cd backend; .\gradlew :llm-service:bootRun` → 8081 (fake 제공자)
 - 전체 테스트: `cd backend; .\gradlew test` (모든 모듈). 한 모듈만: `.\gradlew :coupon-api:test`
 - 동시성 테스트만: `.\gradlew :coupon-api:test --tests "com.couponrush.coupon.CouponIssueConcurrencyTest" --rerun`
   → 결과 숫자: `coupon-api\build\reports\tests\test\classes\com.couponrush.coupon.CouponIssueConcurrencyTest.html` 의 Standard output

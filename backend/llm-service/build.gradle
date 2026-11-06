@@ -1,0 +1,28 @@
+// LLM 호출 전담 서비스. 사용자 요청을 직접 받지 않는다 — llm-requests(Kafka)를 읽고 llm-results 로 답한다.
+// DB 없음 (상태는 coupon-api 의 llm_requests). Redis 는 멱등 처리·(5단계) 캐시·토큰 예산용.
+plugins {
+	id 'org.springframework.boot'
+	id 'io.spring.dependency-management'
+}
+
+dependencies {
+	implementation project(':llm-contract')
+
+	// actuator 헬스체크용으로만 웹 서버를 띄운다 (공개 API 없음, compose 에서 포트를 열지 않음)
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'org.springframework.kafka:spring-kafka'
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.springframework.kafka:spring-kafka-test'
+	testImplementation 'org.awaitility:awaitility'
+	testImplementation 'org.testcontainers:junit-jupiter'
+	testImplementation 'org.testcontainers:kafka'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}

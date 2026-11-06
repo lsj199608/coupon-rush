@@ -2,9 +2,10 @@ rootProject.name = 'coupon-rush'
 
 // 모듈 구성 (7단계에서 멀티모듈로 전환)
 //   coupon-api   : 기존 백엔드 전체 (로그인, 쿠폰, 발급). 외부 요청을 받는 유일한 서비스
-//   llm-service  : LLM 호출 전담 (예정) — 발급 경로와 프로세스 단위로 격리
+//   llm-service  : LLM 호출 전담 — 발급 경로와 프로세스 단위로 격리 (공개 API 없음, LLM 키는 여기만)
 //   llm-contract : 두 서비스가 주고받는 Kafka 메시지 계약 (폴더는 libs/llm-contract)
 include 'coupon-api'
+include 'llm-service'
 include 'llm-contract'
 
 // libs/ 아래에 두되 프로젝트 경로는 :llm-contract (include 'libs:llm-contract' 로 하면 빈 :libs 프로젝트가 하나 더 생긴다)
