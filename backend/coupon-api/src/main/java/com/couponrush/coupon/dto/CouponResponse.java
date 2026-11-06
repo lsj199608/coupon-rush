@@ -8,6 +8,7 @@ import java.time.Instant;
 /**
  * 이벤트(쿠폰) 정보.
  *
+ * @param description       이벤트 설명 (없으면 null)
  * @param remainingQuantity 남은 수량. Redis 재고가 있으면 그 값(발급 판정의 기준이라 가장 정확),
  *                          없으면 DB 기준. 비동기 모드에서 DB 카운터는 컨슈머 처리만큼 늦게 따라온다.
  * @param status            서버 시각 기준 상태 (UPCOMING / OPEN / ENDED)
@@ -16,6 +17,7 @@ import java.time.Instant;
 public record CouponResponse(
         Long id,
         String name,
+        String description,
         int totalQuantity,
         int issuedQuantity,
         int remainingQuantity,
@@ -26,7 +28,7 @@ public record CouponResponse(
 
     public static CouponResponse of(Coupon coupon, Integer redisRemaining, Instant now) {
         int remaining = redisRemaining != null ? Math.max(redisRemaining, 0) : coupon.getRemainingQuantity();
-        return new CouponResponse(coupon.getId(), coupon.getName(), coupon.getTotalQuantity(),
+        return new CouponResponse(coupon.getId(), coupon.getName(), coupon.getDescription(), coupon.getTotalQuantity(),
                 coupon.getTotalQuantity() - remaining, remaining,
                 coupon.getIssueStartAt(), coupon.getIssueEndAt(), CouponStatus.of(coupon, now), now);
     }

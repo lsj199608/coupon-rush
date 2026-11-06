@@ -64,6 +64,15 @@ class FlywayMigrationTest {
     }
 
     @Test
+    void 쿠폰_설명이_공백뿐이면_DB_가_거부한다() {
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "INSERT INTO coupons (name, description, total_quantity, issued_quantity, issue_start_at, issue_end_at,"
+                        + " version, created_at, updated_at)"
+                        + " VALUES ('설명 공백', '   ', 1, 0, now(), now() + interval '1 hour', 0, now(), now())"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
     void 허용되지_않은_provider_는_DB_가_거부한다() {
         assertThatThrownBy(() -> jdbcTemplate.update("""
                 INSERT INTO users (provider, provider_id, nickname, role, created_at, updated_at)

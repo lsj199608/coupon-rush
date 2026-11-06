@@ -95,6 +95,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         SDK 재시도 + Resilience4j 서킷 브레이커, 구조화된 출력 + 개수·길이 검증(1회 재생성), 거절 처리 — 아래 "Anthropic 제공자" 메모.
         테스트는 WireMock만 (실제 API 호출 없음 — 실제 키로 확인은 아직 안 함)
   - [x] 5) 비용 통제: 응답 캐시(24h) + 일일 토큰 예산 50,000(LLM_DAILY_TOKEN_BUDGET) + 사용량 Redis 기록 — 아래 "비용 통제" 메모
+  - [x] 6) V6 coupons.description (VARCHAR(500) NULL, 공백만이면 CHECK로 거부): 생성 요청·응답(목록·상세)에 description.
+        앱은 앞뒤 공백 제거, 공백만이면 null, 501자 이상 400. 길이 상한 = LLM 후보 설명 상한(테스트로 고정). 요청에 없으면 null(하위 호환)
   - [ ] 다음:
         4) 실제 LLM(Spring AI) + 타임아웃·재시도·서킷  5) 캐시·토큰 예산  6) V6 description  7) 프론트  8) compose·문서
 
@@ -166,6 +168,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - API: GET /api/coupons(목록, 공개), GET /api/coupons/{id}(공개), POST /api/coupons/{id}/issue, GET /api/users/me/coupons,
   POST /api/admin/coupons(ROLE_ADMIN). 발급자는 토큰에서만 꺼낸다 (바디로 userId 받지 않음).
   화면 용어 "이벤트" = 백엔드 coupons 한 행 (API 경로는 /api/coupons 유지).
+- description(V6, 선택, 최대 500자): 관리자가 직접 쓰거나 LLM 문구 후보를 골라 고친 값 — 서버는 출처를 구분하지 않고, LLM 결과를 자동 저장하지 않는다.
+  Coupon.DESCRIPTION_MAX == EventCopyCandidate.DESCRIPTION_MAX (CouponTest가 검사 — 후보를 그대로 넣어도 넘치지 않게).
 - 조회 응답(CouponResponse)에 status(UPCOMING/OPEN/ENDED, 서버 Clock 기준)와 serverTime 포함.
   remainingQuantity는 Redis 재고 우선(판정 기준, 비동기 모드에서 DB 카운터는 컨슈머만큼 늦음), 없으면 DB.
   목록은 오픈 시각 최신순 50개, Redis 재고는 MGET 한 번(RedisCouponStock.getStocks).

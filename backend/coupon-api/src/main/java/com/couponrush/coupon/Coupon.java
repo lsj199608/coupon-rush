@@ -16,12 +16,18 @@ import java.time.Instant;
 @Table(name = "coupons")
 public class Coupon {
 
+    public static final int DESCRIPTION_MAX = 500;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(nullable = false, length = 100)
     private String name;
+
+    /** 이벤트 설명 (V6, 선택). 최대 500자 — LLM 문구 후보 길이(EventCopyCandidate.DESCRIPTION_MAX)와 같다 */
+    @Column(length = DESCRIPTION_MAX)
+    private String description;
 
     @Column(nullable = false)
     private int totalQuantity;
@@ -51,8 +57,9 @@ public class Coupon {
     protected Coupon() {
     }
 
-    private Coupon(String name, int totalQuantity, Instant issueStartAt, Instant issueEndAt) {
+    private Coupon(String name, String description, int totalQuantity, Instant issueStartAt, Instant issueEndAt) {
         this.name = name;
+        this.description = description;
         this.totalQuantity = totalQuantity;
         this.issuedQuantity = 0;
         this.issueStartAt = issueStartAt;
@@ -60,6 +67,11 @@ public class Coupon {
     }
 
     public static Coupon create(String name, int totalQuantity, Instant issueStartAt, Instant issueEndAt) {
+        return create(name, null, totalQuantity, issueStartAt, issueEndAt);
+    }
+
+    /** @param description 선택. 공백만 있으면 없음(null)으로 저장 */
+    public static Coupon create(String name, String description, int totalQuantity, Instant issueStartAt, Instant issueEndAt) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("쿠폰 이름은 필수입니다.");
         }
@@ -69,7 +81,11 @@ public class Coupon {
         if (issueStartAt == null || issueEndAt == null || !issueStartAt.isBefore(issueEndAt)) {
             throw new IllegalArgumentException("발급 시작 시각은 종료 시각보다 앞서야 합니다.");
         }
-        return new Coupon(name.strip(), totalQuantity, issueStartAt, issueEndAt);
+        String normalizedDescription = description == null || description.isBlank() ? null : description.strip();
+        if (normalizedDescription != null && normalizedDescription.length() > DESCRIPTION_MAX) {
+            throw new IllegalArgumentException("설명은 " + DESCRIPTION_MAX + "자 이하여야 합니다.");
+        }
+        return new Coupon(name.strip(), normalizedDescription, totalQuantity, issueStartAt, issueEndAt);
     }
 
     /** 시작 시각 포함, 종료 시각 미포함 [start, end) */
@@ -101,6 +117,7 @@ public class Coupon {
 
     public Long getId() { return id; }
     public String getName() { return name; }
+    public String getDescription() { return description; }
     public int getTotalQuantity() { return totalQuantity; }
     public int getIssuedQuantity() { return issuedQuantity; }
     public Instant getIssueStartAt() { return issueStartAt; }

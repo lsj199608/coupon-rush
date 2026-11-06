@@ -69,7 +69,7 @@ public class CouponService {
     @Transactional
     public Coupon create(CouponCreateRequest request) {
         Coupon coupon = couponRepository.save(Coupon.create(
-                request.name(), request.totalQuantity(), request.issueStartAt(), request.issueEndAt()));
+                request.name(), request.description(), request.totalQuantity(), request.issueStartAt(), request.issueEndAt()));
 
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override

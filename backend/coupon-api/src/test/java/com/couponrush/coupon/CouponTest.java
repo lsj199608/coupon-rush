@@ -34,6 +34,24 @@ class CouponTest {
     }
 
     @Test
+    void 설명은_선택이고_앞뒤_공백을_지우며_공백만_있으면_없음으로_둔다() {
+        Instant now = Instant.now();
+        Instant end = now.plus(Duration.ofHours(1));
+
+        assertThat(Coupon.create("이름", 1, now, end).getDescription()).isNull();
+        assertThat(Coupon.create("이름", "  설명  ", 1, now, end).getDescription()).isEqualTo("설명");
+        assertThat(Coupon.create("이름", "   ", 1, now, end).getDescription()).isNull();
+        assertThat(Coupon.create("이름", "가".repeat(500), 1, now, end).getDescription()).hasSize(500);
+        assertThatThrownBy(() -> Coupon.create("이름", "가".repeat(501), 1, now, end))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void 설명_길이_상한은_LLM_문구_후보_상한과_같다_후보를_그대로_저장할_수_있다() {
+        assertThat(Coupon.DESCRIPTION_MAX).isEqualTo(com.couponrush.llm.contract.EventCopyCandidate.DESCRIPTION_MAX);
+    }
+
+    @Test
     void 잘못된_값으로는_생성할_수_없다() {
         assertThatThrownBy(() -> Coupon.create(" ", 1, START, END)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> Coupon.create("쿠폰", 0, START, END)).isInstanceOf(IllegalArgumentException.class);

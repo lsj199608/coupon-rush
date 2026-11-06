@@ -82,6 +82,51 @@ class CouponApiTest {
         }
 
         @Test
+        void 설명을_함께_저장하고_상세와_목록에서_돌려준다() throws Exception {
+            Map<String, Object> request = new java.util.HashMap<>(validRequest(10));
+            request.put("description", "  12월 1일 10시, 딱 300잔만 반값입니다.  ");
+
+            String body = createCoupon(adminToken, request)
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.description").value("12월 1일 10시, 딱 300잔만 반값입니다."))   // 앞뒤 공백 제거
+                    .andReturn().getResponse().getContentAsString();
+            long couponId = objectMapper.readTree(body).get("id").asLong();
+
+            mockMvc.perform(get("/api/coupons/{id}", couponId))
+                    .andExpect(jsonPath("$.description").value("12월 1일 10시, 딱 300잔만 반값입니다."));
+            mockMvc.perform(get("/api/coupons"))
+                    .andExpect(jsonPath("$[?(@.id == " + couponId + ")].description").value("12월 1일 10시, 딱 300잔만 반값입니다."));
+        }
+
+        @Test
+        void 설명은_선택이다_없거나_공백이면_null() throws Exception {
+            String omitted = createCoupon(adminToken, validRequest(10))   // 기존 요청 그대로 (하위 호환)
+                    .andExpect(status().isCreated())
+                    .andReturn().getResponse().getContentAsString();
+            org.assertj.core.api.Assertions.assertThat(objectMapper.readTree(omitted).get("description").isNull()).isTrue();
+
+            Map<String, Object> blank = new java.util.HashMap<>(validRequest(10));
+            blank.put("description", "   ");
+            String body = createCoupon(adminToken, blank).andExpect(status().isCreated())
+                    .andReturn().getResponse().getContentAsString();
+            org.assertj.core.api.Assertions.assertThat(objectMapper.readTree(body).get("description").isNull()).isTrue();
+        }
+
+        @Test
+        void 설명이_500자를_넘으면_400() throws Exception {
+            Map<String, Object> request = new java.util.HashMap<>(validRequest(10));
+            request.put("description", "가".repeat(501));
+
+            createCoupon(adminToken, request)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_INPUT"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("description")));
+
+            request.put("description", "가".repeat(500));
+            createCoupon(adminToken, request).andExpect(status().isCreated());
+        }
+
+        @Test
         void 관리자는_DB_기준으로_Redis_재고를_재동기화할_수_있다() throws Exception {
             Instant now = Instant.now();
             Coupon coupon = couponRepository.save(Coupon.create("미적재", 5, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))));   // DB 에만 있고 Redis 에는 없음
