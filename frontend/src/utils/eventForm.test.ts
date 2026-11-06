@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { defaultEventFormValues, toCreateEventInput, toLocalInputValue, validateEventForm, type EventFormValues } from './eventForm';
+import {
+  defaultEventFormValues,
+  toCreateEventInput,
+  toEventCopyInput,
+  toLocalInputValue,
+  validateEventCopyRequest,
+  validateEventForm,
+  type EventFormValues,
+} from './eventForm';
 
 const NOW = new Date('2030-01-01T09:00').getTime();
 
 function values(overrides: Partial<EventFormValues> = {}): EventFormValues {
   return {
     name: '블프',
+    description: '',
     totalQuantity: '100',
     issueStartAt: '2030-01-01T10:00',
     issueEndAt: '2030-01-01T11:00',
@@ -64,6 +73,7 @@ describe('폼 값 → API 바디', () => {
   it('이름을 다듬고 수량은 숫자로, 로컬 시각은 UTC ISO 로', () => {
     expect(toCreateEventInput(values({ name: '  블프 ' }))).toEqual({
       name: '블프',
+      description: null,
       totalQuantity: 100,
       issueStartAt: new Date('2030-01-01T10:00').toISOString(),
       issueEndAt: new Date('2030-01-01T11:00').toISOString(),
@@ -75,5 +85,40 @@ describe('폼 값 → API 바디', () => {
     expect(defaults.issueStartAt).toBe('2030-01-01T09:06');
     expect(defaults.issueEndAt).toBe('2030-01-01T10:06');
     expect(toLocalInputValue(new Date('2030-03-04T05:06').getTime())).toBe('2030-03-04T05:06');
+  });
+});
+
+describe('설명 (선택)', () => {
+  it('앞뒤 공백을 지워 보내고, 비어 있으면 null', () => {
+    expect(toCreateEventInput(values({ description: '  12월 1일 10시  ' })).description).toBe('12월 1일 10시');
+    expect(toCreateEventInput(values({ description: '   ' })).description).toBeNull();
+  });
+
+  it('500자까지 허용하고 넘으면 안내한다', () => {
+    expect(validateEventForm(values({ description: '가'.repeat(500) }), NOW).description).toBeUndefined();
+    expect(validateEventForm(values({ description: '가'.repeat(501) }), NOW).description).toBe('설명은 500자 이하로 입력해 주세요.');
+  });
+});
+
+describe('문구 생성 요청', () => {
+  it('키워드가 없거나 너무 길면, 또는 수량이 잘못됐으면 막는다', () => {
+    expect(validateEventCopyRequest('  ', values())).toMatch(/키워드를 입력/);
+    expect(validateEventCopyRequest('가'.repeat(201), values())).toMatch(/200자/);
+    expect(validateEventCopyRequest('겨울', values({ totalQuantity: '0' }))).toMatch(/총 수량/);
+    expect(validateEventCopyRequest('겨울', values())).toBeNull();
+  });
+
+  it('폼의 수량과 (올바를 때만) 기간을 함께 보낸다', () => {
+    expect(toEventCopyInput(' 겨울 할인 ', 'URGENT', values(), false)).toEqual({
+      keywords: '겨울 할인',
+      tone: 'URGENT',
+      totalQuantity: 100,
+      issueStartAt: new Date('2030-01-01T10:00').toISOString(),
+      issueEndAt: new Date('2030-01-01T11:00').toISOString(),
+      regenerate: false,
+    });
+    const reversed = toEventCopyInput('겨울', 'FRIENDLY', values({ issueEndAt: '2030-01-01T09:00' }), true);
+    expect(reversed).not.toHaveProperty('issueStartAt');
+    expect(reversed.regenerate).toBe(true);
   });
 });

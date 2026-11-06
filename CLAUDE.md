@@ -97,8 +97,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - [x] 5) 비용 통제: 응답 캐시(24h) + 일일 토큰 예산 50,000(LLM_DAILY_TOKEN_BUDGET) + 사용량 Redis 기록 — 아래 "비용 통제" 메모
   - [x] 6) V6 coupons.description (VARCHAR(500) NULL, 공백만이면 CHECK로 거부): 생성 요청·응답(목록·상세)에 description.
         앱은 앞뒤 공백 제거, 공백만이면 null, 501자 이상 400. 길이 상한 = LLM 후보 설명 상한(테스트로 고정). 요청에 없으면 null(하위 호환)
-  - [ ] 다음:
-        4) 실제 LLM(Spring AI) + 타임아웃·재시도·서킷  5) 캐시·토큰 예산  6) V6 description  7) 프론트  8) compose·문서
+  - [x] 7) 프론트: 관리자 폼에 설명 칸 + AI 문구 추천 패널(키워드·톤 → 2초 폴링 → 후보 3개 → 고르면 이름·설명 채움, 저장은 [이벤트 만들기]),
+        사유별 안내·재시도, 상세 화면에 설명 — 아래 "프론트엔드 (6단계)"의 "AI 문구 추천" 메모. 브라우저 수동 확인은 아직
+  - [ ] 다음: 8) compose(llm 프로필, Dockerfile, Kafka 내부·외부 리스너) + 문서 정리
 
 ## 결정 사항 / 메모
 
@@ -339,9 +340,9 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 
 | 폴더 | 내용 |
 |---|---|
-| api/ | axios 호출·응답 타입(coupons, admin, auth), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
-| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents |
-| components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary |
+| api/ | axios 호출·응답 타입(coupons, admin, auth, llm), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
+| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents, useEventCopy(문구 생성 상태 머신) |
+| components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary, EventCopyPanel(AI 문구 추천) |
 | pages/ | EventList, EventDetail, MyCoupons, AdminEventCreate, Login, OAuthCallback, NotFound |
 | auth/ | AuthContext(세션 상태), ProtectedRoute(로그인 필요), AdminRoute(ADMIN 필요) |
 | utils/ | format(날짜·카운트다운), eventForm(관리자 폼 검증·변환) |
@@ -357,7 +358,7 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 | `/` | 이벤트 목록 (상태 뱃지 오픈 전/진행 중/종료, 남은 수량) | 공개 | GET /api/coupons |
 | `/events/:id` | 상세: 기간·남은 수량·카운트다운·[발급 받기] | 공개 (발급만 로그인) | GET /api/coupons/{id} (3초마다), POST .../issue, GET /api/issue-requests/{id} |
 | `/me/coupons` | 내 쿠폰 | 로그인 | GET /api/users/me/coupons |
-| `/admin/events/new` | 이벤트 생성 폼 + Redis 재고 적재 확인 | ADMIN | POST /api/admin/coupons, GET .../reconciliation |
+| `/admin/events/new` | 이벤트 생성 폼(설명 포함) + AI 문구 추천 + Redis 재고 적재 확인 | ADMIN | POST /api/admin/coupons, GET .../reconciliation, POST /api/admin/llm/event-copy, GET /api/admin/llm/requests/{id} |
 | `/login` | 카카오·네이버·구글 버튼 | 공개 | (페이지 이동) /oauth2/authorization/{provider} |
 | `/oauth/callback` | 로그인 완료 처리 후 원래 화면으로 | 공개 | POST /api/auth/refresh |
 | 그 외 | NotFoundPage (없는 이벤트·/events/abc 포함) | 공개 | — |
@@ -404,6 +405,20 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
   → 실제로 쓰는 /login/oauth2(OAuth 콜백)만 넘긴다. 화면 경로는 src/routes.ts(ROUTES)에 모으고 src/routes.test.ts가 겹침을 검사한다.
 - /oauth2, /login/oauth2 프록시는 **changeOrigin: true** — Spring이 Host로 redirect_uri를 만들기 때문에 8080이 되어야 콘솔 등록 주소와 일치
   (false면 redirect_uri가 5173이 되어 "등록되지 않은 redirect_uri" 오류). 쿠키는 포트를 구분하지 않아서(localhost) 5173의 refresh 요청에도 실린다.
+
+#### AI 문구 추천 (7단계, components/EventCopyPanel + hooks/useEventCopy)
+```
+[문구 생성] (키워드 1~200자, 톤 4종, 폼의 총 수량 + 올바를 때만 기간) ─ POST /api/admin/llm/event-copy
+   ├─ 429 LLM_RATE_LIMITED / LLM_DAILY_LIMIT_EXCEEDED / LLM_BUDGET_EXCEEDED, 503 → rejected (일·예산 소진은 [다시 시도] 없음)
+   └─ 202 → GET /api/admin/llm/requests/{id} 2초 폴링 (화면 타임아웃 75초 = 서버 마감 60초 + 여유)
+         ├─ COMPLETED → 후보 3개 [이 문구 쓰기] → 폼의 이름·설명을 채움 (cached면 "같은 입력의 문구" 안내) + [다시 생성](regenerate)
+         └─ FAILED → llmFailureMessage(사유), retryable 일 때만 [다시 시도]
+```
+- **결과는 제안일 뿐 — 자동 저장 없음.** 고르면 폼 칸만 채우고, 관리자가 고친 뒤 [이벤트 만들기]를 눌러야 POST /api/admin/coupons(description 포함).
+- useEventCopy는 useIssueCoupon과 같은 구조(상태는 mutation + query에서 계산, inFlight ref로 연타 방지, 타임아웃은 "끝났는지"만 의존).
+  EVENT_COPY_POLLING(2s/75s)은 화면 테스트에서 짧게 바꾸고, useEventCopy.test.tsx는 가짜 시계로 실제 값 검증.
+- 메시지는 api/errors.ts의 LLM_* 코드와 llmFailureMessage(LLM_UNAVAILABLE·BUDGET_EXCEEDED·INVALID_OUTPUT·CONTENT_REFUSED·TIMEOUT·PUBLISH_FAILED).
+- 설명: 폼 textarea(maxLength 500, 검증 500자), 비우면 null로 보냄. 상세·생성 완료 화면에 표시(white-space: pre-line).
 
 #### 발급 폴링 구조 (hooks/useIssueCoupon)
 ```

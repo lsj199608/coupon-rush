@@ -5,4 +5,5 @@ export const queryKeys = {
   issueRequest: (requestId: string) => ['issue-requests', requestId] as const,
   myCoupons: ['my-coupons'] as const,
   stockCheck: (couponId: number) => ['admin', 'stock-check', couponId] as const,
+  llmRequest: (requestId: string) => ['admin', 'llm-requests', requestId] as const,
 };

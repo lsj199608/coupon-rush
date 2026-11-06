@@ -118,7 +118,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .form { display: flex; flex-direction: column; gap: 16px; max-width: 480px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-weight: 600; }
-.field input {
+.field input,
+.field textarea,
+.field select {
   font: inherit;
   font-size: 16px;   /* 16px 미만이면 iOS 사파리가 입력할 때 화면을 확대한다 */
   width: 100%;
@@ -128,7 +130,24 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border-radius: 8px;
   background: var(--surface);
 }
-.field input[aria-invalid='true'] { border-color: var(--error); }
+.field input[aria-invalid='true'],
+.field textarea[aria-invalid='true'] { border-color: var(--error); }
+.field textarea { resize: vertical; }
+
+/* ---------- AI 문구 추천 (관리자) ---------- */
+.copy-panel {
+  display: flex; flex-direction: column; gap: 12px;
+  max-width: 480px; margin-bottom: 24px; padding: 16px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+}
+.copy-panel h2 { margin: 0; font-size: 18px; }
+.copy-result { display: flex; flex-direction: column; gap: 12px; }
+.candidates { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.candidate { padding: 12px; border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 6px; }
+.candidate p { margin: 0; overflow-wrap: anywhere; }
+.candidate-name { font-weight: 700; }
+.candidate button { align-self: flex-start; }
+.event-description { margin: 8px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
 .field-error { margin: 0; color: var(--error); font-size: 14px; }
 .hint { margin: 0; font-size: 14px; }
 
@@ -144,7 +163,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   .detail-head { flex-direction: column; align-items: flex-start; gap: 0; }
   .detail-info { grid-template-columns: 72px 1fr; }
   .coupon-card { flex-direction: column; align-items: flex-start; }
-  .form { max-width: none; }
+  .form, .copy-panel { max-width: none; }
+  .candidate button { align-self: stretch; }
   .form button[type='submit'], .actions > * { flex: 1 1 auto; }
   .issue-panel {
     /* 발급 버튼을 화면 아래에 붙여 엄지로 바로 누를 수 있게 */

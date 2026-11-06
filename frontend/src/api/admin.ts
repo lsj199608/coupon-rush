@@ -4,6 +4,8 @@ import type { CouponEvent } from './coupons';
 /** POST /api/admin/coupons 바디 (백엔드 CouponCreateRequest 와 같은 모양, 시각은 ISO-8601 UTC) */
 export interface CreateEventInput {
   name: string;
+  /** 선택 (최대 500자). 비우면 null */
+  description: string | null;
   totalQuantity: number;
   issueStartAt: string;
   issueEndAt: string;

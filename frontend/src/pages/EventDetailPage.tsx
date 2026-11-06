@@ -40,6 +40,7 @@ function EventDetail({ event }: { event: CouponEvent }) {
       <div className="detail-head">
         <StatusBadge status={status} />
         <h1>{event.name}</h1>
+        {event.description && <p className="event-description">{event.description}</p>}
       </div>
       <dl className="detail-info">
         <dt>발급 기간</dt>

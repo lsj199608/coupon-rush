@@ -6,6 +6,8 @@ export type EventStatus = 'UPCOMING' | 'OPEN' | 'ENDED';
 export interface CouponEvent {
   id: number;
   name: string;
+  /** 이벤트 설명 (없으면 null) */
+  description: string | null;
   totalQuantity: number;
   issuedQuantity: number;
   /** Redis 재고 기준 (발급 판정의 기준이라 가장 정확) */

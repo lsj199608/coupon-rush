@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import type { CouponEvent } from '../api/coupons';
 import { errorMessageOf, formErrorMessageOf } from '../api/errors';
+import { EventCopyPanel } from '../components/EventCopyPanel';
 import { Spinner } from '../components/Spinner';
 import { useCreateEventMutation, useStockCheckQuery } from '../hooks/useAdminEvents';
 import { eventPath } from '../routes';
@@ -17,6 +18,7 @@ import {
 
 const FIELDS: { key: keyof EventFormValues; label: string }[] = [
   { key: 'name', label: '이벤트 이름' },
+  { key: 'description', label: '설명 (선택)' },
   { key: 'totalQuantity', label: '총 수량' },
   { key: 'issueStartAt', label: '발급 시작' },
   { key: 'issueEndAt', label: '발급 종료' },
@@ -32,8 +34,8 @@ export function AdminEventCreatePage() {
   const [submitted, setSubmitted] = useState(false);
   const mutation = useCreateEventMutation();
 
-  const update = (key: keyof EventFormValues, value: string) => {
-    const next = { ...values, [key]: value };
+  const update = (patch: Partial<EventFormValues>) => {
+    const next = { ...values, ...patch };
     setValues(next);
     if (submitted) setErrors(validateEventForm(next, Date.now()));
   };
@@ -62,18 +64,34 @@ export function AdminEventCreatePage() {
   return (
     <section>
       <h1>이벤트 만들기</h1>
+      <EventCopyPanel
+        values={values}
+        onApply={(candidate) => update({ name: candidate.name, description: candidate.description })}
+      />
       <form className="form" onSubmit={handleSubmit} noValidate>
         {FIELDS.map(({ key, label }) => (
           <div key={key} className="field">
             <label htmlFor={`event-${key}`}>{label}</label>
-            <input
-              id={`event-${key}`}
-              {...inputProps(key)}
-              value={values[key]}
-              onChange={(e) => update(key, e.target.value)}
-              aria-invalid={errors[key] ? true : undefined}
-              aria-describedby={errors[key] ? `event-${key}-error` : undefined}
-            />
+            {key === 'description' ? (
+              <textarea
+                id={`event-${key}`}
+                rows={3}
+                maxLength={EVENT_LIMITS.descriptionMax}
+                value={values[key]}
+                onChange={(e) => update({ [key]: e.target.value })}
+                aria-invalid={errors[key] ? true : undefined}
+                aria-describedby={errors[key] ? `event-${key}-error` : undefined}
+              />
+            ) : (
+              <input
+                id={`event-${key}`}
+                {...inputProps(key)}
+                value={values[key]}
+                onChange={(e) => update({ [key]: e.target.value })}
+                aria-invalid={errors[key] ? true : undefined}
+                aria-describedby={errors[key] ? `event-${key}-error` : undefined}
+              />
+            )}
             {errors[key] && (
               <p id={`event-${key}-error`} className="field-error">
                 {errors[key]}
@@ -116,6 +134,7 @@ function CreatedEvent({ event, onCreateAnother }: { event: CouponEvent; onCreate
         <p>
           <strong>{event.name}</strong> 이벤트를 만들었어요. (ID {event.id})
         </p>
+        {event.description && <p className="event-description">{event.description}</p>}
         <p className="muted">
           {formatDateTime(event.issueStartAt)} ~ {formatDateTime(event.issueEndAt)} · 총 {event.totalQuantity.toLocaleString()}개
         </p>

@@ -22,6 +22,22 @@ const MESSAGES: Record<string, string> = {
   TOKEN_REVOKED: '로그아웃된 상태예요. 다시 로그인해 주세요.',
   FORBIDDEN: '권한이 없어요.',
   INVALID_INPUT: '요청 값이 올바르지 않아요.',
+  // 관리자 문구 생성 (접수 단계에서 바로 거절)
+  LLM_RATE_LIMITED: '문구 생성은 1분에 5번까지예요. 잠시 후 다시 시도해 주세요.',
+  LLM_DAILY_LIMIT_EXCEEDED: '오늘 문구 생성 횟수(50번)를 모두 썼어요. 내일 다시 시도해 주세요.',
+  LLM_BUDGET_EXCEEDED: '오늘 문구 생성 예산을 모두 썼어요. 내일 다시 시도하거나 직접 입력해 주세요.',
+  LLM_REQUEST_UNAVAILABLE: '문구 생성 요청을 접수하지 못했어요. 잠시 후 다시 시도해 주세요.',
+  LLM_REQUEST_NOT_FOUND: '문구 생성 결과를 찾을 수 없어요. 다시 생성해 주세요.',
+};
+
+/** 문구 생성 실패 사유(FAILED.failureReason, 백엔드 LlmFailureReason) → 메시지 */
+const LLM_FAILURE_MESSAGES: Record<string, string> = {
+  LLM_UNAVAILABLE: 'AI 문구 생성이 잠시 원활하지 않아요. 잠시 후 다시 시도해 주세요.',
+  BUDGET_EXCEEDED: MESSAGES.LLM_BUDGET_EXCEEDED,
+  INVALID_OUTPUT: '쓸 만한 문구를 만들지 못했어요. 다시 시도해 주세요.',
+  CONTENT_REFUSED: '이 내용으로는 문구를 만들 수 없어요. 키워드를 바꿔 주세요.',
+  TIMEOUT: '문구 생성이 너무 오래 걸려 중단했어요. 다시 시도해 주세요.',
+  PUBLISH_FAILED: MESSAGES.LLM_REQUEST_UNAVAILABLE,
 };
 
 /** 컨슈머가 DB 저장에 실패한 사유(FAILED.failureReason) → 메시지 */
@@ -67,6 +83,10 @@ export function formErrorMessageOf(error: unknown): string {
 
 export function failureReasonMessage(reason: string | undefined): string {
   return (reason && FAILURE_REASON_MESSAGES[reason]) || GENERIC;
+}
+
+export function llmFailureMessage(reason: string | null | undefined): string {
+  return (reason && LLM_FAILURE_MESSAGES[reason]) || GENERIC;
 }
 
 export function isFinalRejection(code: string | undefined): boolean {

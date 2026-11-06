@@ -1,9 +1,12 @@
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as adminApi from '../api/admin';
 import type { StockReconciliation } from '../api/admin';
 import * as authApi from '../api/auth';
+import * as llmApi from '../api/llm';
+import type { LlmRequestResult } from '../api/llm';
+import { EVENT_COPY_POLLING } from '../hooks/useEventCopy';
 import type { CouponEvent } from '../api/coupons';
 import { tokenStore } from '../api/tokenStore';
 import { apiError, renderApp } from '../test/renderApp';
@@ -13,6 +16,10 @@ vi.mock('../api/auth', async (importOriginal) => {
   return { ...actual, restoreSession: vi.fn(), fetchMe: vi.fn(), logout: vi.fn() };
 });
 vi.mock('../api/admin', () => ({ createEvent: vi.fn(), fetchStockReconciliation: vi.fn() }));
+vi.mock('../api/llm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api/llm')>();
+  return { ...actual, requestEventCopy: vi.fn(), fetchLlmRequest: vi.fn() };
+});
 vi.mock('../api/coupons', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/coupons')>();
   return { ...actual, fetchEvents: vi.fn().mockResolvedValue([]), fetchEvent: vi.fn() };
@@ -142,6 +149,7 @@ describe('이벤트 생성 폼', () => {
     expect(await screen.findByText(/이벤트를 만들었어요/)).toBeInTheDocument();
     expect(adminApi.createEvent).toHaveBeenCalledWith({
       name: '블랙프라이데이',
+      description: null,
       totalQuantity: 300,
       issueStartAt: new Date('2030-01-01T10:00').toISOString(),
       issueEndAt: new Date('2030-01-01T11:30').toISOString(),
@@ -212,5 +220,152 @@ describe('이벤트 생성 폼', () => {
     await userEvent.click(screen.getByRole('button', { name: '하나 더 만들기' }));
 
     await waitFor(() => expect(field('이벤트 이름')).toHaveValue(''));
+  });
+});
+
+function llmResult(status: LlmRequestResult['status'], extra: Partial<LlmRequestResult> = {}): LlmRequestResult {
+  return {
+    requestId: 'llm-1',
+    type: 'EVENT_COPY',
+    status,
+    candidates: [],
+    failureReason: null,
+    retryable: null,
+    model: 'fake',
+    inputTokens: 0,
+    outputTokens: 0,
+    cached: false,
+    createdAt: new Date().toISOString(),
+    deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+    completedAt: null,
+    ...extra,
+  };
+}
+
+const CANDIDATES = [
+  { name: '[선착순 300명] 핫초코 반값', description: '딱 300명만! 놓치면 다시 없는 기회입니다.' },
+  { name: '마감 임박 핫초코', description: '수량 소진 시 즉시 종료됩니다.' },
+  { name: '핫초코 — 지금이 마지막 기회', description: '선착순 300명, 서두르세요.' },
+];
+
+describe('AI 문구 추천', () => {
+  beforeEach(() => {
+    loginAs('ADMIN');
+    EVENT_COPY_POLLING.intervalMs = 20;
+    EVENT_COPY_POLLING.timeoutMs = 500;
+    vi.mocked(llmApi.requestEventCopy).mockResolvedValue({ requestId: 'llm-1', status: 'PENDING', deadlineAt: '' });
+    vi.mocked(adminApi.createEvent).mockImplementation(async (input) => created(input));
+    vi.mocked(adminApi.fetchStockReconciliation).mockResolvedValue(stock());
+  });
+
+  afterEach(() => {
+    EVENT_COPY_POLLING.intervalMs = 2_000;
+    EVENT_COPY_POLLING.timeoutMs = 75_000;
+  });
+
+  async function openAndGenerate(keywords = '겨울 한정 핫초코 50% 할인') {
+    renderApp(PATH);
+    await screen.findByLabelText('키워드');
+    await fill('총 수량', '300');
+    await userEvent.type(field('키워드'), keywords);
+    await userEvent.selectOptions(screen.getByLabelText('톤'), 'URGENT');
+    await userEvent.click(screen.getByRole('button', { name: '문구 생성' }));
+  }
+
+  it('생성 → 폴링 → 후보 3개, 고르면 이름·설명 칸을 채우고 저장은 [이벤트 만들기]를 눌러야 된다', async () => {
+    vi.mocked(llmApi.fetchLlmRequest)
+      .mockResolvedValueOnce(llmResult('PENDING'))
+      .mockResolvedValue(llmResult('COMPLETED', { candidates: CANDIDATES }));
+
+    await openAndGenerate();
+
+    expect(llmApi.requestEventCopy).toHaveBeenCalledWith(
+      expect.objectContaining({ keywords: '겨울 한정 핫초코 50% 할인', tone: 'URGENT', totalQuantity: 300, regenerate: false }),
+    );
+    const useButtons = await screen.findAllByRole('button', { name: '이 문구 쓰기' });
+    expect(useButtons).toHaveLength(3);
+
+    await userEvent.click(useButtons[1]);
+
+    expect(field('이벤트 이름')).toHaveValue('마감 임박 핫초코');
+    expect(field('설명 (선택)')).toHaveValue('수량 소진 시 즉시 종료됩니다.');
+    expect(screen.getByRole('status')).toHaveTextContent('[이벤트 만들기]를 눌러야 저장돼요');
+    expect(adminApi.createEvent).not.toHaveBeenCalled();   // 고르기만 해서는 저장되지 않는다
+
+    await userEvent.type(field('설명 (선택)'), ' (1인 1회)');   // 관리자가 고친 뒤 저장
+    await userEvent.click(screen.getByRole('button', { name: '이벤트 만들기' }));
+
+    expect(await screen.findByText(/이벤트를 만들었어요/)).toBeInTheDocument();
+    expect(adminApi.createEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '마감 임박 핫초코', description: '수량 소진 시 즉시 종료됩니다. (1인 1회)' }),
+    );
+  });
+
+  it('[다시 생성]은 regenerate=true 로 요청한다', async () => {
+    vi.mocked(llmApi.fetchLlmRequest).mockResolvedValue(llmResult('COMPLETED', { candidates: CANDIDATES, cached: true }));
+    await openAndGenerate();
+
+    expect(await screen.findByText('같은 입력으로 만든 문구를 다시 보여 드려요.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '다시 생성' }));
+
+    await waitFor(() => expect(llmApi.requestEventCopy).toHaveBeenLastCalledWith(expect.objectContaining({ regenerate: true })));
+  });
+
+  it('키워드가 없으면 요청하지 않고 안내한다', async () => {
+    renderApp(PATH);
+    await userEvent.click(await screen.findByRole('button', { name: '문구 생성' }));
+
+    expect(screen.getByText(/키워드를 입력해 주세요/)).toBeInTheDocument();
+    expect(llmApi.requestEventCopy).not.toHaveBeenCalled();
+  });
+
+  it('분당 한도(429)는 안내와 [다시 시도], 예산 소진은 [다시 시도] 없이 안내만', async () => {
+    vi.mocked(llmApi.requestEventCopy).mockRejectedValueOnce(apiError(429, 'LLM_RATE_LIMITED'));
+    await openAndGenerate();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('1분에 5번까지');
+
+    vi.mocked(llmApi.requestEventCopy).mockRejectedValueOnce(apiError(429, 'LLM_BUDGET_EXCEEDED'));
+    await userEvent.click(screen.getByRole('button', { name: '다시 시도' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('예산을 모두 썼어요'));
+    expect(screen.queryByRole('button', { name: '다시 시도' })).not.toBeInTheDocument();
+  });
+
+  it('입력을 바꿔야 하는 실패(거절)는 사유를 안내하고 [다시 시도]가 없다', async () => {
+    vi.mocked(llmApi.fetchLlmRequest).mockResolvedValue(
+      llmResult('FAILED', { failureReason: 'CONTENT_REFUSED', retryable: false }),
+    );
+    await openAndGenerate();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('키워드를 바꿔 주세요');
+    expect(screen.queryByRole('button', { name: '다시 시도' })).not.toBeInTheDocument();
+  });
+
+  it('LLM 장애처럼 다시 시도할 수 있는 실패는 [다시 시도]가 있다', async () => {
+    vi.mocked(llmApi.fetchLlmRequest).mockResolvedValue(
+      llmResult('FAILED', { failureReason: 'LLM_UNAVAILABLE', retryable: true }),
+    );
+    await openAndGenerate();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('잠시 원활하지 않아요');
+    expect(screen.getByRole('button', { name: '다시 시도' })).toBeInTheDocument();
+  });
+
+  it('결과가 너무 늦으면 폴링을 멈추고 안내한다', async () => {
+    vi.mocked(llmApi.fetchLlmRequest).mockResolvedValue(llmResult('PENDING'));
+    await openAndGenerate();
+
+    expect(await screen.findByRole('alert', {}, { timeout: 2_000 })).toHaveTextContent('너무 오래 걸려');
+  });
+
+  it('생성 중에는 버튼이 꺼져 두 번 요청되지 않는다', async () => {
+    vi.mocked(llmApi.fetchLlmRequest).mockResolvedValue(llmResult('PENDING'));
+    await openAndGenerate();
+
+    const busy = await screen.findByRole('button', { name: '만드는 중…' });
+    expect(busy).toBeDisabled();
+    await userEvent.click(busy);
+    expect(llmApi.requestEventCopy).toHaveBeenCalledTimes(1);
   });
 });

@@ -31,6 +31,7 @@ function event(overrides: Partial<CouponEvent> = {}): CouponEvent {
   return {
     id: 1,
     name: '오픈 기념 쿠폰',
+    description: null,
     totalQuantity: 100,
     issuedQuantity: 30,
     remainingQuantity: 70,
@@ -107,6 +108,14 @@ describe('이벤트 상세와 발급', () => {
   afterEach(() => {
     ISSUE_POLLING.intervalMs = 1_000;
     ISSUE_POLLING.timeoutMs = 30_000;
+  });
+
+  it('설명이 있으면 이름 아래에 보여 준다', async () => {
+    vi.mocked(couponsApi.fetchEvent).mockResolvedValue(event({ description: '12월 1일 10시, 딱 300잔만 반값입니다.' }));
+
+    renderApp('/events/1');
+
+    expect(await screen.findByText('12월 1일 10시, 딱 300잔만 반값입니다.')).toBeInTheDocument();
   });
 
   it('오픈 전에는 버튼이 꺼져 있고 서버 시각 기준 카운트다운을 보여 준다', async () => {
