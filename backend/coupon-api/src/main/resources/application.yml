@@ -119,6 +119,17 @@ app:
       enabled: ${COUPON_RECONCILE_ENABLED:true}
       initial-delay: PT1M
       interval: PT10M
+  llm:
+    # LLM 요청(관리자 문구 생성)의 coupon-api 쪽 설정. LLM 키·모델·토큰 예산은 llm-service 설정이다
+    request-timeout: ${LLM_REQUEST_TIMEOUT:60s}   # 이 안에 결과가 없으면 FAILED(TIMEOUT)
+    publish-timeout: 5s                           # llm-requests 발행 ack 대기 (넘으면 503)
+    zone: Asia/Seoul                              # 분·일 한도 창의 기준 시간대 (일 한도는 한국 자정에 초기화)
+    rate-limit:
+      per-minute: ${LLM_RATE_LIMIT_PER_MINUTE:5}  # 사용자별
+      per-day: ${LLM_RATE_LIMIT_PER_DAY:50}
+    timeout-sweep:
+      enabled: true
+      interval: PT30S                             # 마감 지난 PENDING 정리 주기
   auth:
     cookie:
       # refresh token 쿠키의 Secure 속성. 로컬(http)에서는 false, HTTPS 배포 시 true

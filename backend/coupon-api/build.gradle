@@ -4,6 +4,10 @@ plugins {
 }
 
 dependencies {
+	// llm-service 와 주고받는 메시지 계약만 의존한다. LLM 클라이언트(spring-ai 등)는 절대 추가하지 않는다 —
+	// 발급 경로 격리 규칙, LlmIsolationTest 가 클래스패스에 없음을 검사한다.
+	implementation project(':llm-contract')
+
 	implementation 'org.springframework.boot:spring-boot-starter-web'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-security'

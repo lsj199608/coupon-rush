@@ -54,6 +54,16 @@ class FlywayMigrationTest {
     }
 
     @Test
+    void LLM_요청_CHECK_제약이_enum_값과_일치한다() {
+        assertThat(allowedValues("ck_llm_requests_status"))
+                .containsExactlyInAnyOrderElementsOf(names(com.couponrush.llm.LlmRequestStatus.values()));
+        assertThat(allowedValues("ck_llm_requests_type"))
+                .containsExactlyInAnyOrderElementsOf(names(com.couponrush.llm.contract.LlmRequestType.values()));
+        assertThat(allowedValues("ck_llm_requests_failure_reason"))
+                .containsExactlyInAnyOrderElementsOf(names(com.couponrush.llm.contract.LlmFailureReason.values()));
+    }
+
+    @Test
     void 허용되지_않은_provider_는_DB_가_거부한다() {
         assertThatThrownBy(() -> jdbcTemplate.update("""
                 INSERT INTO users (provider, provider_id, nickname, role, created_at, updated_at)

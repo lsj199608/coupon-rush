@@ -85,7 +85,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
       첫 기능: 관리자 이벤트 문구 생성 → 관리자가 확인·수정 후 저장 (V6 coupons.description, nullable)
   - [x] 0) Gradle 멀티모듈 전환: backend/src → backend/coupon-api/src (동작 변화 없음, 기존 테스트 전부 통과)
   - [x] 1) 메시지 계약 모듈 :llm-contract (폴더 libs/llm-contract, com.couponrush.llm.contract) — 아래 "LLM 메시지 계약" 메모
-  - [ ] 2) coupon-api 요청·상태·결과 컨슈머·레이트 리밋  3) llm-service 뼈대 + fake
+  - [x] 2) coupon-api 쪽 (com.couponrush.llm): V5 llm_requests, POST /api/admin/llm/event-copy(202), GET /api/admin/llm/requests/{id},
+        결과 컨슈머(전용 그룹·컨테이너), 타임아웃(조회 시 즉시 + 30초 스케줄러), 레이트 리밋 Lua — 아래 "LLM 요청 (coupon-api)" 메모
+  - [ ] 3) llm-service 뼈대 + fake
         4) 실제 LLM(Spring AI) + 타임아웃·재시도·서킷  5) 캐시·토큰 예산  6) V6 description  7) 프론트  8) compose·문서
 
 ## 결정 사항 / 메모
@@ -449,6 +451,31 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 - 실패 결과에도 쓴 토큰을 싣는다 (INVALID_OUTPUT처럼 호출 후 실패해도 비용은 나갔으므로 예산에 잡아야 함).
 - LlmContractJsonTest: 왕복 직렬화, **필드 이름 고정**(바꾸면 실패 — 의도한 변경이면 버전과 함께 고친다), 고정 JSON 읽기,
   모르는 필드 무시(FAIL_ON_UNKNOWN_PROPERTIES=true인 엄격한 mapper로 검증), 빠진 선택 필드 기본값, 규칙 위반 거절.
+
+### LLM 요청 (7단계, coupon-api 쪽) — com.couponrush.llm, V5 llm_requests
+```
+POST /api/admin/llm/event-copy (ROLE_ADMIN, {keywords, tone, totalQuantity, issueStartAt?, issueEndAt?, regenerate})
+  ① 레이트 리밋 Lua (사용자별 분 5 / 일 50, Asia/Seoul 창) → 초과면 429, 행·메시지 없음
+  ② llm_requests INSERT PENDING (deadline = now + 60s) — 발행 "전에" 커밋 (결과가 행보다 먼저 오면 조건부 UPDATE 0행 → 결과 유실)
+  ③ llm-requests 발행 (키 requestId), ack 최대 5초 → 실패면 FAILED(PUBLISH_FAILED) + 503 LLM_REQUEST_UNAVAILABLE
+  ④ 202 + Location /api/admin/llm/requests/{id}
+llm-results 컨슈머 (그룹 coupon-api-llm-results, 리스너 llmResultListener, 전용 컨테이너 concurrency 1)
+  → UPDATE ... WHERE request_id = ? AND status = 'PENDING'  (0행 = 중복·늦은 결과·모르는 요청 → 로그만, 예외 없음)
+```
+- **PENDING부터 DB에 쓴다** (발급은 Redis에만). 분당 몇 건이라 부담이 없고 조회·타임아웃 정리가 DB 한 곳에서 끝난다.
+- 상태 전이는 LlmRequestRepository의 조건부 UPDATE(native)뿐 — 결과·타임아웃이 동시에 와도 행마다 한쪽만 반영(LlmResultHandlerTest 경합 테스트).
+  CHECK 제약: COMPLETED ⇒ result 있고 사유 없음, FAILED ⇒ 사유 있음, status/type/failure_reason 값 목록(FlywayMigrationTest가 enum과 비교).
+- 타임아웃: 조회(GET) 때 마감이 지났으면 그 자리에서 TIMEOUT 확정 + LlmRequestTimeoutScheduler(30초, app.llm.timeout-sweep.*)가 아무도 안 보는 요청 정리.
+  TIMEOUT 뒤에 온 결과는 버린다(비용은 이미 나감 → WARN 로그). 테스트에서는 스케줄러를 끄고 LlmRequestTimeouts.sweep() 직접 호출.
+- 결과 컨슈머 에러: 읽을 수 없는 메시지(형식·계약 위반)는 건너뜀, DB 일시 장애는 1초×5회 후 포기(→ 마감 후 TIMEOUT). 결과용 DLT 없음.
+  에러 핸들러는 Bean이 아니라 컨테이너 팩토리 안에서 생성 (발급 메인 CommonErrorHandler 자동 적용을 깨지 않게).
+- 시각은 마이크로초로 자른다 (Windows Clock 100ns vs PostgreSQL µs → 메시지 deadline과 DB deadline_at이 달라지는 버그가 테스트에서 나왔음).
+- 조회는 본인 요청만 (남의 requestId·없는 ID 모두 404 LLM_REQUEST_NOT_FOUND). requestedBy FK 없음(감사 기록).
+- 에러 코드: LLM_RATE_LIMITED(429, 분), LLM_DAILY_LIMIT_EXCEEDED(429, 일), LLM_REQUEST_UNAVAILABLE(503), LLM_REQUEST_NOT_FOUND(404).
+- Redis 키: llm:rate:{userId}:d:{yyyyMMdd} (TTL 2일), llm:rate:{userId}:m:{yyyyMMddHHmm} (TTL 2분). 거절된 요청은 세지 않는다.
+- 격리: coupon-api는 :llm-contract만 의존. LlmIsolationTest가 spring-ai / anthropic / openai / langchain4j가 클래스패스에 없음을 검사.
+  LlmRequestApiTest가 결과 리스너의 그룹·컨테이너·에러 핸들러가 발급 리스너와 다른지 검사. 테스트 정리: llm_requests 행, llm:* 키.
+- 아직 없음: 일일 토큰 예산(5단계, llm-service가 판정·기록), coupons.description(6단계).
 
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)

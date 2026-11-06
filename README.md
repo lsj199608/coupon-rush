@@ -133,6 +133,9 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 | `KAFKA_TOPIC_PARTITIONS` | `3` | 발급 토픽 파티션 수 (늘리기만 가능) |
 | `KAFKA_TOPIC_REPLICAS` | `1` | 토픽 복제 수 (로컬 단일 브로커는 1) |
 | `KAFKA_CONSUMER_CONCURRENCY` | `3` | 서버 1대의 컨슈머 스레드 수 (파티션 수 이하) |
+| `LLM_REQUEST_TIMEOUT` | `60s` | LLM 문구 생성 요청 마감. 이 안에 결과가 없으면 실패(TIMEOUT) |
+| `LLM_RATE_LIMIT_PER_MINUTE` | `5` | 관리자 1명의 분당 LLM 요청 한도 (넘으면 429) |
+| `LLM_RATE_LIMIT_PER_DAY` | `50` | 관리자 1명의 일일 LLM 요청 한도 (한국 자정 초기화) |
 
 `.env`는 기동할 때만 읽습니다. 값을 바꾸면 `bootRun`(포트·DB 값이면 `docker compose`도)을 다시 시작하세요.
 

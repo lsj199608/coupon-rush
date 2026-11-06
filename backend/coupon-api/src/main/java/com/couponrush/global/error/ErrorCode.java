@@ -36,7 +36,16 @@ public enum ErrorCode {
     COUPON_ISSUE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "발급 요청을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요."),
 
     // 발급 요청 (비동기)
-    ISSUE_REQUEST_NOT_FOUND(HttpStatus.NOT_FOUND, "발급 요청을 찾을 수 없습니다.");
+    ISSUE_REQUEST_NOT_FOUND(HttpStatus.NOT_FOUND, "발급 요청을 찾을 수 없습니다."),
+
+    // LLM 요청 (7단계)
+    LLM_REQUEST_NOT_FOUND(HttpStatus.NOT_FOUND, "문구 생성 요청을 찾을 수 없습니다."),
+    /** 사용자별 분당 한도 초과 (기본 5회) — 잠시 후 다시 */
+    LLM_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "요청이 너무 잦습니다. 1분 뒤에 다시 시도해 주세요."),
+    /** 사용자별 일일 한도 초과 (기본 50회) — 내일 다시 */
+    LLM_DAILY_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 문구 생성 횟수를 모두 사용했습니다. 내일 다시 시도해 주세요."),
+    /** llm-requests 발행이 확정되지 않음 (요청은 FAILED(PUBLISH_FAILED) 로 남는다) */
+    LLM_REQUEST_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "문구 생성 요청을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.");
 
     private final HttpStatus status;
     private final String message;
