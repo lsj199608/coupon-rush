@@ -61,10 +61,10 @@ docker compose ps        # postgres, redis, kafka 가 running(healthy) 인지 �
 
 ```powershell
 cd backend
-.\gradlew bootRun
+.\gradlew :coupon-api:bootRun
 ```
 
-- `infra/.env`를 `../infra/.env`로 읽기 때문에 **반드시 `backend/` 폴더에서** 실행합니다.
+- `backend/`는 Gradle 멀티모듈 루트입니다. `:coupon-api:bootRun`은 `backend/coupon-api` 폴더에서 실행되어 `../../infra/.env`를 읽습니다. **명령은 `backend/` 폴더에서** 입력합니다.
 - 처음 기동할 때 Flyway가 스키마를 만들고, Kafka 토픽(`coupon-issue-requests`, `.DLT`)이 자동으로 생깁니다.
 - 확인: `curl.exe http://localhost:8080/actuator/health` → `{"status":"UP"}`
 
@@ -139,17 +139,17 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 ## 테스트
 
 ```powershell
-cd backend;  .\gradlew test        # Testcontainers 로 Postgres/Redis/Kafka 를 따로 띄움 (Docker 실행 필요, .env 불필요)
+cd backend;  .\gradlew test        # 모든 모듈. Testcontainers 로 Postgres/Redis/Kafka 를 따로 띄움 (Docker 실행 필요, .env 불필요)
 cd frontend; npm test              # Vitest + React Testing Library
 cd frontend; npm run build         # 타입 검사 + 프로덕션 빌드
-cd backend;  .\gradlew benchmark   # (선택) 방식별 성능 측정, 약 12분 → build/benchmark/*.md
+cd backend;  .\gradlew :coupon-api:benchmark   # (선택) 방식별 성능 측정, 약 12분 → coupon-api/build/benchmark/*.md
 ```
 
 ## 문제 해결
 
 | 증상 | 원인 / 해결 |
 |---|---|
-| bootRun이 `Could not resolve placeholder 'POSTGRES_DB'` | `backend/`가 아닌 곳에서 실행했거나 `infra/.env`가 없음 |
+| bootRun이 `Could not resolve placeholder 'POSTGRES_DB'` | `infra/.env`가 없음, 또는 `:coupon-api:bootRun`이 아닌 다른 작업 폴더에서 실행함 (`.env`를 `backend/coupon-api` 기준 `../../infra/.env`로 찾음) |
 | `docker compose up`이 `POSTGRES_PASSWORD 를 설정하세요` | `infra/.env`의 필수 값이 비어 있음 |
 | DB 접속이 `password authentication failed` | 볼륨이 예전 비밀번호로 만들어짐. 로컬 데이터라면 `docker compose down -v` 후 다시 `up` |
 | 화면 API가 전부 실패, Vite 터미널에 `http proxy error ... ECONNREFUSED` | 백엔드(8080)가 떠 있지 않음 |
@@ -160,7 +160,8 @@ cd backend;  .\gradlew benchmark   # (선택) 방식별 성능 측정, 약 12분
 ## 폴더 구조
 
 ```
-backend/   Spring Boot (com.couponrush.{auth, user, coupon, global}), Flyway 마이그레이션, Lua 스크립트
+backend/   Gradle 멀티모듈 루트
+  coupon-api/   Spring Boot (com.couponrush.{auth, user, coupon, global}), Flyway 마이그레이션, Lua 스크립트
 frontend/  React (src/{api, hooks, components, pages, auth, utils})
 infra/     docker-compose.yml, .env.example
 docs/      동시성·Redis·Kafka 설계와 측정 기록

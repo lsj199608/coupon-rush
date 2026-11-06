@@ -1,10 +1,10 @@
 spring:
   application:
     name: coupon-rush
-  # infra/.env 를 프로퍼티로 읽어온다 (backend/ 에서 실행 기준). 없으면 무시.
+  # infra/.env 를 프로퍼티로 읽어온다 (작업 폴더 backend/coupon-api 기준 — gradlew :coupon-api:bootRun 이 이 폴더에서 실행). 없으면 무시.
   # → 비밀번호를 코드/설정 파일에 두지 않고 docker-compose 와 같은 .env 하나로 관리
   config:
-    import: optional:file:../infra/.env[.properties]
+    import: optional:file:../../infra/.env[.properties]
 
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB}

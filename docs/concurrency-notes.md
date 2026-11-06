@@ -837,7 +837,7 @@ return 1
 
 ## 7. 동기 Redis vs Kafka 비동기 — 응답 시간과 완료 시간, 파티션/컨커런시
 
-`AsyncIssueBenchmarkTest` (`./gradlew benchmark --tests "com.couponrush.coupon.AsyncIssueBenchmarkTest"`, 결과: `build/benchmark/coupon-issue-async.md`)
+`AsyncIssueBenchmarkTest` (`./gradlew :coupon-api:benchmark --tests "com.couponrush.coupon.AsyncIssueBenchmarkTest"`, 결과: `coupon-api/build/benchmark/coupon-issue-async.md`)
 
 ### 측정 조건
 
@@ -957,20 +957,20 @@ return 1
 ```powershell
 cd backend
 # 정확성 (세 방식 모두)
-.\gradlew test --tests "com.couponrush.coupon.CouponIssueConcurrencyTest" --rerun
-start build\reports\tests\test\classes\com.couponrush.coupon.CouponIssueConcurrencyTest.html   # Standard output 탭
+.\gradlew :coupon-api:test --tests "com.couponrush.coupon.CouponIssueConcurrencyTest" --rerun
+start coupon-apiuildeports\tests\test\classes\com.couponrush.coupon.CouponIssueConcurrencyTest.html   # Standard output 탭
 
 # 소요 시간 비교 (두 benchmark 합쳐 약 8분)
-.\gradlew benchmark
-notepad build\benchmark\coupon-issue-strategies.md   # 재고 100 / 1000 시나리오
-notepad build\benchmark\coupon-issue-scale.md        # 1,000명 / 10,000명 / 중복 요청
+.\gradlew :coupon-api:benchmark
+notepad coupon-apiuildenchmark\coupon-issue-strategies.md   # 재고 100 / 1000 시나리오
+notepad coupon-apiuildenchmark\coupon-issue-scale.md        # 1,000명 / 10,000명 / 중복 요청
 
 # 하나만 돌리기
-.\gradlew benchmark --tests "com.couponrush.coupon.CouponIssueScaleBenchmarkTest"
+.\gradlew :coupon-api:benchmark --tests "com.couponrush.coupon.CouponIssueScaleBenchmarkTest"
 ```
 
 - 순진한 구현의 실패를 다시 보려면 `PessimisticLockCouponIssuer`의 `findByIdForUpdate`를 `findById`로 잠시 바꿔 실행한 뒤
-  `git checkout -- backend/src`로 되돌린다.
+  `git checkout -- backend/coupon-api/src`로 되돌린다.
 - 실제 서버의 방식을 바꾸려면 `infra/.env`에 `COUPON_ISSUE_STRATEGY=redis`(또는 `pessimistic-lock`, `optimistic-lock`)를 넣고 bootRun을 재시작한다.
   진행 중인 이벤트에서 방식을 바꾸면 Redis와 DB 재고가 갈라지므로, 바꾼 뒤에는 `POST /api/admin/coupons/{id}/stock/sync`로 맞춘다.
 - Redis 상태 보기: `docker exec coupon-rush-redis redis-cli GET "event:{1}:stock"`, `SCARD "event:{1}:issued"`

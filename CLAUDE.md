@@ -15,7 +15,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - LLM: Spring AI (나중 단계)
 
 ## 구조
-- backend/ : Spring Boot 프로젝트
+- backend/ : Gradle 멀티모듈 루트 (gradlew 위치). coupon-api/ = 기존 Spring Boot 앱 전체, (7단계) llm-service/, libs/llm-contract/
 - frontend/ : React 프로젝트
 - infra/ : docker-compose.yml 등 인프라 설정
 - docs/ : 설계/실험 기록 (concurrency-notes.md: 동시성 재현·해결 리포트, 단계마다 결과 추가)
@@ -79,17 +79,27 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         백엔드: GET /api/coupons 목록 추가, 응답에 status·serverTime, 남은 수량은 Redis 기준
   - [x] 관리자 이벤트 생성 폼(검증 + 생성 직후 Redis 재고 적재 확인), 모바일 반응형, 에러 바운더리, 404, 주요 흐름 테스트
   - [ ] 남은 것: 실제 브라우저 수동 확인(로그인·발급·모바일 폭) 후 6단계 완료 표시, (선택) Playwright E2E
-- [ ] 7. LLM 기능
+- [ ] 7. LLM 기능  ← 진행 중. 설계: LLM은 별도 서비스(llm-service)로 분리, coupon-api ↔ llm-service는 Kafka 요청/응답,
+      DB는 coupon-api만(llm_requests), llm-service는 공개 포트 없음·LLM 키 단독 보유. Spring AI + Anthropic, 기본·테스트는 fake 제공자
+      (키 없으면 자동 fake). 레이트 리밋 사용자당 분 5회 / 일 50회, 마감 60초, 일일 토큰 예산 50,000(초과 시 거절, 사용량 Redis 기록).
+      첫 기능: 관리자 이벤트 문구 생성 → 관리자가 확인·수정 후 저장 (V6 coupons.description, nullable)
+  - [x] 0) Gradle 멀티모듈 전환: backend/src → backend/coupon-api/src (동작 변화 없음, 기존 테스트 전부 통과)
+  - [ ] 1) libs:llm-contract  2) coupon-api 요청·상태·결과 컨슈머·레이트 리밋  3) llm-service 뼈대 + fake
+        4) 실제 LLM(Spring AI) + 타임아웃·재시도·서킷  5) 캐시·토큰 예산  6) V6 description  7) 프론트  8) compose·문서
 
 ## 결정 사항 / 메모
 
 ### 공통 / 인프라
 - Spring Boot 3.5.16 고정: Spring Initializr가 4.x만 제공해서 Wrapper만 받고 build.gradle에서 수동 지정.
   Gradle Wrapper는 Boot 3.5 호환을 위해 8.14.3.
+- Gradle 멀티모듈 (7단계): backend/가 루트(settings.gradle, gradlew, 공통 설정은 루트 build.gradle의 subprojects).
+  모듈 의존성은 각 모듈 build.gradle에. 실행·테스트 명령은 backend/에서 `:coupon-api:bootRun`처럼 모듈을 지정한다
+  (`--tests` 필터는 모든 모듈에 걸리므로 모듈 지정 필수). bootRun·test의 작업 폴더는 모듈 폴더 → .env는 ../../infra/.env.
+  모듈 간 공유는 메시지 계약(libs:llm-contract)만 — 엔티티·보안·에러 코드는 공유하지 않는다.
 - 패키지: com.couponrush.{auth, user, coupon, global(config, error)}
 - 이미지: pgvector/pgvector:pg17, redis:7.4-alpine, apache/kafka:3.9.1 (KRaft 단일 노드)
 - 접속 정보/비밀값은 infra/.env 하나로 관리. docker-compose와 Spring(application.yml의
-  spring.config.import: optional:file:../infra/.env[.properties])이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
+  spring.config.import: optional:file:../../infra/.env[.properties], 작업 폴더 backend/coupon-api 기준)이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
 - 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.
 - 에러 응답은 {"code","message"} (global/error: ErrorCode, BusinessException, GlobalExceptionHandler).
   @Valid 실패·JSON 형식 오류·경로 타입 오류는 400 INVALID_INPUT.
@@ -105,7 +115,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   (IssueStrategy 파라미터 테스트에 REDIS가 포함되므로).
 
 ### DB / Flyway
-- 스키마는 Flyway로만 변경한다 (backend/src/main/resources/db/migration/V{n}__설명.sql).
+- 스키마는 Flyway로만 변경한다 (backend/coupon-api/src/main/resources/db/migration/V{n}__설명.sql).
   ddl-auto: validate — 엔티티와 스키마가 다르면 기동 실패. 이미 적용된 마이그레이션 파일은 수정하지 않고 새 버전을 추가한다.
 - enum(OAuth2Provider, Role)에 값을 추가하면 CHECK 제약(users_provider_check, users_role_check)을
   바꾸는 마이그레이션도 추가해야 한다. 빠뜨리면 FlywayMigrationTest가 실패한다.
@@ -404,7 +414,7 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 
 #### 실행 방법
 1. `cd infra; docker compose up -d` (Postgres 5432, Redis 6379, Kafka 9092)
-2. `cd backend; .\gradlew bootRun` → 8080 (infra/.env를 읽음)
+2. `cd backend; .\gradlew :coupon-api:bootRun` → 8080 (infra/.env를 읽음)
 3. `cd frontend; npm install; npm run dev` → http://localhost:5173 (프론트는 환경변수 없음, 프록시 대상은 vite.config.ts의 BACKEND)
 - 테스트 / 빌드: `npm test` / `npm run build` (tsc 타입 검사 + vite build). 자세한 순서·환경변수는 README.md.
 
@@ -421,13 +431,13 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)
 - 프론트 테스트 / 빌드: `npm test` / `npm run build` (tsc 타입 검사 + vite build)
-- 전체 테스트: `cd backend; .\gradlew test`
-- 동시성 테스트만: `.\gradlew test --tests "com.couponrush.coupon.CouponIssueConcurrencyTest" --rerun`
-  → 결과 숫자: `build\reports\tests\test\classes\com.couponrush.coupon.CouponIssueConcurrencyTest.html` 의 Standard output
-- 방식별 성능 비교: `.\gradlew benchmark` (@Tag("benchmark"), 기본 test에서 제외, 전체 약 12분)
-  → `build\benchmark\coupon-issue-strategies.md` (재고 100/1000), `build\benchmark\coupon-issue-scale.md` (1k/10k/중복 요청),
-    `build\benchmark\coupon-issue-async.md` (동기 vs 비동기 응답/완료 시간, 파티션·컨커런시 — 약 4분)
-  하나만: `.\gradlew benchmark --tests "com.couponrush.coupon.AsyncIssueBenchmarkTest"`
+- 전체 테스트: `cd backend; .\gradlew test` (모든 모듈). 한 모듈만: `.\gradlew :coupon-api:test`
+- 동시성 테스트만: `.\gradlew :coupon-api:test --tests "com.couponrush.coupon.CouponIssueConcurrencyTest" --rerun`
+  → 결과 숫자: `coupon-api\build\reports\tests\test\classes\com.couponrush.coupon.CouponIssueConcurrencyTest.html` 의 Standard output
+- 방식별 성능 비교: `.\gradlew :coupon-api:benchmark` (@Tag("benchmark"), 기본 test에서 제외, 전체 약 12분)
+  → `coupon-api\build\benchmark\coupon-issue-strategies.md` (재고 100/1000), `coupon-api\build\benchmark\coupon-issue-scale.md` (1k/10k/중복 요청),
+    `coupon-api\build\benchmark\coupon-issue-async.md` (동기 vs 비동기 응답/완료 시간, 파티션·컨커런시 — 약 4분)
+  하나만: `.\gradlew :coupon-api:benchmark --tests "com.couponrush.coupon.AsyncIssueBenchmarkTest"`
   ⚠ AsyncIssueBenchmarkTest는 테스트용 브로커의 토픽 파티션을 6으로 늘린다 (benchmark JVM 안에서만, 컨테이너는 실행마다 새로 뜸)
 - 동기/비동기 바꾸기: `.env`에 `COUPON_ISSUE_MODE=sync` (기본 async) → bootRun 재시작
 - Kafka 토픽/컨슈머 보기:
@@ -452,6 +462,6 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 2. git clone https://github.com/lsj199608/coupon-rush.git
 3. infra/.env.example → infra/.env 복사 후 값 채우기 (.env는 git에 없음, 변수 설명은 README.md "환경변수")
 4. git config --global user.name / user.email 설정
-5. 확인: cd infra && docker compose up -d → cd ../backend && ./gradlew test
+5. 확인: cd infra && docker compose up -d → cd ../backend && ./gradlew test (모든 모듈)
    프론트: Node.js 20 이상 설치 → cd frontend && npm install && npm test
 6. 기존 로컬 DB가 Flyway 도입 전 것이면 위 "DB / Flyway" 메모대로 정리
