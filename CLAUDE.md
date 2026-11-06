@@ -84,7 +84,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
       (키 없으면 자동 fake). 레이트 리밋 사용자당 분 5회 / 일 50회, 마감 60초, 일일 토큰 예산 50,000(초과 시 거절, 사용량 Redis 기록).
       첫 기능: 관리자 이벤트 문구 생성 → 관리자가 확인·수정 후 저장 (V6 coupons.description, nullable)
   - [x] 0) Gradle 멀티모듈 전환: backend/src → backend/coupon-api/src (동작 변화 없음, 기존 테스트 전부 통과)
-  - [ ] 1) libs:llm-contract  2) coupon-api 요청·상태·결과 컨슈머·레이트 리밋  3) llm-service 뼈대 + fake
+  - [x] 1) 메시지 계약 모듈 :llm-contract (폴더 libs/llm-contract, com.couponrush.llm.contract) — 아래 "LLM 메시지 계약" 메모
+  - [ ] 2) coupon-api 요청·상태·결과 컨슈머·레이트 리밋  3) llm-service 뼈대 + fake
         4) 실제 LLM(Spring AI) + 타임아웃·재시도·서킷  5) 캐시·토큰 예산  6) V6 description  7) 프론트  8) compose·문서
 
 ## 결정 사항 / 메모
@@ -427,6 +428,27 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 - React는 자식 effect를 부모보다 먼저 실행한다 (콜백 페이지의 refresh가 AuthProvider 복원보다 먼저 호출됨).
   실제로는 single-flight라 같은 결과를 공유하지만, mock으로 호출 순서별 응답을 다르게 주면 테스트가 엇갈린다.
 - 실제 소셜 로그인(제공자 화면)은 자동 테스트하지 않는다 — 수동 확인.
+
+### LLM 메시지 계약 (7단계) — backend/libs/llm-contract, 프로젝트 경로 :llm-contract
+순수 Java(Spring 없음, jackson-annotations만). coupon-api와 llm-service가 함께 의존하는 **유일한 공유 모듈**.
+
+| 토픽 | 방향 | 키 | 값 |
+|---|---|---|---|
+| `llm-requests` | coupon-api → llm-service | requestId | `LlmRequestMessage(schemaVersion, requestId, type, requestedBy, requestedAt, deadline, regenerate, eventCopy)` |
+| `llm-results` | llm-service → coupon-api | requestId | `LlmResultMessage(schemaVersion, requestId, status, candidates, failureReason, model, inputTokens, outputTokens, cached, latencyMs, completedAt)` |
+| `llm-requests.DLT` | | | 역직렬화 불가 요청만. LLM 실패는 FAILED 결과로 돌려준다 (재시도 = 비용) |
+
+- 진화 규칙: 필드는 **추가만** (모든 레코드 @JsonIgnoreProperties(ignoreUnknown=true) → 먼저 배포된 쪽이 새 필드를 무시).
+  이름 변경·삭제·의미 변경은 SCHEMA_VERSION을 올린다. 받는 쪽은 LlmTopics.isSupported(version)가 false면 처리하지 않는다.
+  enum 값 추가는 구버전 소비자에서 역직렬화 실패(→ DLT)가 되므로 소비자부터 배포.
+- 레코드 compact 생성자가 규칙을 검사한다 → 깨진 메시지는 **읽는 순간 예외** (LLM을 부르기 전에 걸러짐).
+  COMPLETED = 후보 1~3개·사유 없음 / FAILED = 사유 필수·후보 없음, 토큰 ≥ 0, deadline > requestedAt, EVENT_COPY면 eventCopy 필수.
+- 길이 상한도 계약에: keywords ≤ 200(프롬프트 비용), 후보 name ≤ 100 / description ≤ 500 (= coupons 컬럼 길이, 그대로 저장 가능).
+- LlmFailureReason 하나에 llm-service 사유(LLM_UNAVAILABLE, BUDGET_EXCEEDED, INVALID_OUTPUT, CONTENT_REFUSED)와
+  coupon-api 사유(TIMEOUT, PUBLISH_FAILED)를 함께 둔다 — DB와 화면 메시지가 한 목록을 기준으로. isRetryable = [다시 시도] 노출 기준.
+- 실패 결과에도 쓴 토큰을 싣는다 (INVALID_OUTPUT처럼 호출 후 실패해도 비용은 나갔으므로 예산에 잡아야 함).
+- LlmContractJsonTest: 왕복 직렬화, **필드 이름 고정**(바꾸면 실패 — 의도한 변경이면 버전과 함께 고친다), 고정 JSON 읽기,
+  모르는 필드 무시(FAIL_ON_UNKNOWN_PROPERTIES=true인 엄격한 mapper로 검증), 빠진 선택 필드 기본값, 규칙 위반 거절.
 
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)

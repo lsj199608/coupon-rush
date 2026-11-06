@@ -1,0 +1,28 @@
+// coupon-api ↔ llm-service 메시지 계약. Spring 에 의존하지 않는 순수 Java 라이브러리.
+// 양쪽이 이 모듈 하나를 함께 쓰므로, 필드 이름·타입이 한쪽만 바뀌는 일은 컴파일 단계에서 걸린다.
+plugins {
+	id 'java-library'
+	id 'io.spring.dependency-management'
+}
+
+dependencyManagement {
+	imports {
+		// 버전은 coupon-api 와 같은 Spring Boot BOM 을 따른다 (Jackson 버전 불일치 방지)
+		mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES
+	}
+}
+
+dependencies {
+	// @JsonIgnoreProperties 만 쓴다. 직렬화 자체(ObjectMapper)는 각 서비스의 Spring Boot 설정이 한다
+	api 'com.fasterxml.jackson.core:jackson-annotations'
+
+	testImplementation 'org.junit.jupiter:junit-jupiter'
+	testImplementation 'org.assertj:assertj-core'
+	testImplementation 'com.fasterxml.jackson.core:jackson-databind'
+	testImplementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
