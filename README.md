@@ -55,7 +55,8 @@ docker compose ps        # postgres, redis, kafka 가 running(healthy) 인지 �
 |---|---|
 | coupon-rush-postgres | 5432 |
 | coupon-rush-redis | 6379 |
-| coupon-rush-kafka | 9092 |
+| coupon-rush-kafka | 9092 (호스트용), 29092 (컨테이너끼리, 호스트에 열지 않음) |
+| coupon-rush-llm-service | 없음 — `--profile llm` 일 때만 (아래 2-1) |
 
 데이터는 Docker 볼륨에 남습니다. 끄기는 `docker compose down`, 데이터까지 지우려면 `docker compose down -v`입니다.
 
@@ -75,6 +76,23 @@ cd backend
 관리자 **이벤트 문구 생성**을 쓸 때만 띄웁니다. 없어도 다른 기능은 모두 동작하고, 문구 생성 요청만 60초 뒤 실패(TIMEOUT)합니다.
 기본은 **fake 제공자**(API 키·비용 없음, 입력으로 정해진 문구 3개)입니다. 실제 Claude를 쓰려면 `infra/.env`에
 `LLM_PROVIDER=anthropic`과 `LLM_API_KEY=...`를 넣고 다시 띄웁니다 (호출마다 비용이 듭니다).
+
+두 가지 방법 중 **하나만** 씁니다 (둘 다 켜면 같은 컨슈머 그룹을 나눠 가져서 로그를 따라가기 어렵습니다).
+
+**A. 컨테이너로 (compose `llm` 프로필)** — 코드를 고치지 않을 때
+
+```powershell
+cd infra
+docker compose --profile llm up -d --build   # 처음엔 이미지 빌드로 몇 분. 이후 코드가 바뀌면 --build 를 다시
+docker compose --profile llm ps              # coupon-rush-llm-service 가 running (healthy)
+docker logs -f coupon-rush-llm-service       # "LLM 제공자: fake" 가 보이면 정상
+```
+
+- 기본 `docker compose up -d`에는 포함되지 않습니다(프로필). 끄기: `docker compose --profile llm stop llm-service`
+- 컨테이너에는 `.env`를 통째로 넘기지 않고 `LLM_*`와 Kafka·Redis 주소만 넘깁니다 (JWT·OAuth·DB 비밀값은 받지 않음).
+- 포트를 열지 않습니다 (공개 API 없음). 컨테이너 안에서는 Kafka에 `kafka:29092`로 접속합니다.
+
+**B. 호스트에서 (bootRun)** — llm-service 코드를 고치며 볼 때
 
 ```powershell
 cd backend
@@ -154,7 +172,7 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 | `LLM_PROVIDER` | `fake` | llm-service의 LLM 제공자: `fake`(키·비용 없음) \| `anthropic`. `anthropic`이어도 `LLM_API_KEY`가 비면 fake로 동작 |
 | `LLM_API_KEY` | (없음) | Anthropic API 키. **비밀값**, llm-service만 읽음 |
 | `LLM_MODEL` | `claude-sonnet-5-5` | 모델 ID (예: `claude-haiku-5-5`, `claude-opus-5-5`) |
-| `LLM_DAILY_TOKEN_BUDGET` | `50000` | 서비스 전체 하루 토큰(입력+출력) 예산, 한국 자정 초기화. 넘으면 문구 생성 거절 (같은 입력의 캐시 응답은 계속 제공) |
+| `LLM_DAILY_TOKEN_BUDGET` | `50000` | 서비스 전체 하루 토큰(입력+출력) 예산, 한국 자정 초기화. 넘으면 문구 생성 요청을 접수 단계에서 429로 거절 |
 
 `.env`는 기동할 때만 읽습니다. 값을 바꾸면 `bootRun`(포트·DB 값이면 `docker compose`도)을 다시 시작하세요.
 

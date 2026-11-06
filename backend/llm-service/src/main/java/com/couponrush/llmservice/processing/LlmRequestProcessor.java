@@ -102,6 +102,7 @@ public class LlmRequestProcessor {
     /**
      * ⑤ 응답 캐시 (regenerate 가 아니면) → ⑥ 일일 예산 → ⑦ LLM 호출 → 사용량 기록 → 성공이면 캐시 저장.
      * 캐시를 예산보다 먼저 보는 이유: 캐시 응답은 비용이 0이라 예산을 다 써도 줄 수 있다.
+     * (단 이미 소진된 뒤의 새 요청은 coupon-api LlmBudgetGuard 가 접수 단계에서 먼저 막는다 — 여기 오는 것은 접수 후 소진된 경우)
      */
     private Processed cachedOrBudgetedOrGenerated(LlmRequestMessage request, Instant now) {
         String cacheKey = ResponseCache.key(client.cacheIdentity(), request.eventCopy());

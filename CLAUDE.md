@@ -99,7 +99,11 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         앱은 앞뒤 공백 제거, 공백만이면 null, 501자 이상 400. 길이 상한 = LLM 후보 설명 상한(테스트로 고정). 요청에 없으면 null(하위 호환)
   - [x] 7) 프론트: 관리자 폼에 설명 칸 + AI 문구 추천 패널(키워드·톤 → 2초 폴링 → 후보 3개 → 고르면 이름·설명 채움, 저장은 [이벤트 만들기]),
         사유별 안내·재시도, 상세 화면에 설명 — 아래 "프론트엔드 (6단계)"의 "AI 문구 추천" 메모. 브라우저 수동 확인은 아직
-  - [ ] 다음: 8) compose(llm 프로필, Dockerfile, Kafka 내부·외부 리스너) + 문서 정리
+  - [x] 8) compose `llm` 프로필 + llm-service Dockerfile(멀티스테이지, JRE·비root·헬스체크), Kafka INTERNAL 리스너(kafka:29092) 추가,
+        **Kafka 데이터가 볼륨에 안 남던 1단계부터의 버그 수정**(KAFKA_LOG_DIRS), 수동 확인 절차 docs/manual-check.md.
+        실제 확인: 이미지 빌드 → 4개 컨테이너 healthy → llm-requests 직접 발행 → 컨테이너가 kafka:29092 로 받아 COMPLETED 응답,
+        kafka 컨테이너를 다시 만들어도 토픽 유지
+  - [ ] 남은 것: docs/manual-check.md 수동 확인(6단계 브라우저 확인 포함) → 6·7단계(첫 기능) 완료 표시. 이후 7단계 다음 기능(자연어 검색 → 챗봇)
 
 ## 결정 사항 / 메모
 
@@ -112,6 +116,13 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   모듈 간 공유는 메시지 계약(libs:llm-contract)만 — 엔티티·보안·에러 코드는 공유하지 않는다.
 - 패키지: com.couponrush.{auth, user, coupon, global(config, error)}
 - 이미지: pgvector/pgvector:pg17, redis:7.4-alpine, apache/kafka:3.9.1 (KRaft 단일 노드)
+- Kafka 리스너 2개: PLAINTEXT://localhost:9092(호스트에서 실행하는 앱·도구용, 기존) + INTERNAL://kafka:29092(compose 네트워크 안 컨테이너용).
+  컨테이너가 localhost:9092로 붙으면 자기 자신을 가리킨다. 호스트에는 29092를 열지 않는다.
+- Kafka 데이터 위치는 KAFKA_LOG_DIRS=/var/lib/kafka/data (볼륨). 이미지 기본값 /tmp/kraft-combined-logs라서 7단계 전까지는 볼륨이 쓰이지 않아
+  컨테이너를 다시 만들면 토픽·오프셋이 사라졌다 (재시작은 괜찮았음). 토픽은 각 앱이 기동 시 NewTopic으로 다시 만든다.
+- llm-service 컨테이너(`docker compose --profile llm up -d --build`): 빌드 컨텍스트 backend/, Dockerfile은 llm-service/Dockerfile,
+  .dockerignore가 build·.gradle·coupon-api/src 제외. 환경변수는 LLM_*·Kafka·Redis만 넘기고 .env를 통째로 주지 않는다(비밀값 분리).
+  포트를 열지 않는다. 호스트 bootRun과 동시에 켜지 않는다(같은 컨슈머 그룹).
 - 접속 정보/비밀값은 infra/.env 하나로 관리. docker-compose와 Spring(application.yml의
   spring.config.import: optional:file:../../infra/.env[.properties], 작업 폴더 backend/coupon-api 기준)이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
 - 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.
@@ -561,7 +572,9 @@ llm-service 처리 순서(LlmRequestProcessor): llm:done → 마감 → llm:infl
 - 캐시 키의 cacheIdentity: fake → `fake:v1`, Anthropic → `anthropic:{model}:{event-copy.v1}:effort={low}` — 모델·프롬프트 버전·effort가 바뀌면 예전 응답을 안 쓴다.
   입력 정규화: 키워드 공백 정리 + 소문자. 키는 해시(관리자 입력이 키 이름에 드러나지 않게). 실패 결과는 캐시하지 않는다(일시 장애가 24시간 가지 않게).
   regenerate=true("다시 생성")는 캐시를 읽지 않고, 새 결과로 덮어쓴다. 캐시 응답 = COMPLETED + cached=true + 토큰 0.
-- 캐시를 예산보다 먼저 본다 → 예산을 다 써도 같은 입력의 캐시 응답은 준다(비용 0).
+- llm-service는 캐시를 예산보다 먼저 본다 → 처리 중에 예산이 바닥나도 캐시 응답은 준다(비용 0).
+  단 **이미 소진된 뒤의 새 요청은 coupon-api LlmBudgetGuard가 접수 단계에서 먼저 막으므로 캐시까지 가지 않는다**
+  (coupon-api는 캐시 키를 모른다 — 프롬프트 버전·모델은 llm-service만 앎. 소진 후 캐시 허용이 필요하면 가드를 빼고 llm-service 판정에 맡기면 된다).
 - 예산: 호출 전 total_tokens < 예산이면 호출, 호출 후 실제 사용량 HINCRBY (실패해도 쓴 토큰은 기록 — INVALID_OUTPUT 등).
   **동시 처리 수(consumer concurrency 2)만큼 예산을 살짝 넘을 수 있다** — 최대 토큰을 미리 예약하면 남은 예산이 실제보다 훨씬 적게 보여 정상 요청까지 막혀서 택하지 않음.
   초과 → LLM 호출 없이 FAILED(BUDGET_EXCEEDED, 재시도 불가 표시). Redis 장애로 예산 확인이 안 되면 호출하지 않는다(예외 → Kafka 재시도 → DLT).
@@ -574,7 +587,10 @@ llm-service 처리 순서(LlmRequestProcessor): llm:done → 마감 → llm:infl
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)
 - 프론트 테스트 / 빌드: `npm test` / `npm run build` (tsc 타입 검사 + vite build)
-- llm-service 실행(선택, 문구 생성용): `cd backend; .\gradlew :llm-service:bootRun` → 8081 (fake 제공자)
+- llm-service 실행(선택, 문구 생성용): 컨테이너 `cd infra; docker compose --profile llm up -d --build` (로그 `docker logs -f coupon-rush-llm-service`)
+  또는 호스트 `cd backend; .\gradlew :llm-service:bootRun` → 8081 (fake 제공자). 둘 중 하나만
+- 수동 확인 절차: docs/manual-check.md (로그인·발급·관리자·AI 문구·장애 격리·예산·모바일, 기록표 포함)
+- 하루 LLM 사용량: `docker exec coupon-rush-redis redis-cli HGETALL "llm:usage:$((Get-Date).ToString('yyyyMMdd'))"`
 - 전체 테스트: `cd backend; .\gradlew test` (모든 모듈). 한 모듈만: `.\gradlew :coupon-api:test`
 - 동시성 테스트만: `.\gradlew :coupon-api:test --tests "com.couponrush.coupon.CouponIssueConcurrencyTest" --rerun`
   → 결과 숫자: `coupon-api\build\reports\tests\test\classes\com.couponrush.coupon.CouponIssueConcurrencyTest.html` 의 Standard output
