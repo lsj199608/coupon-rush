@@ -39,6 +39,21 @@ app:
     topic:
       partitions: ${KAFKA_TOPIC_PARTITIONS:3}
   llm:
+    # fake(기본) | anthropic. anthropic 이어도 LLM_API_KEY 가 비어 있으면 fake 로 동작한다
+    provider: ${LLM_PROVIDER:fake}
+    anthropic:
+      api-key: ${LLM_API_KEY:}
+      model: ${LLM_MODEL:claude-sonnet-5-5}
+      effort: low           # 짧은 문구라 생각을 적게 (출력 토큰 = 비용)
+      max-tokens: 4000      # 생각 + 후보 3개(각 최대 600자). 잘리면 1회 재생성
+      timeout: 15s          # 요청 1회. SDK 재시도 2회까지 ≈ 45초 + 백오프 < 요청 마감 60초
+      max-retries: 2        # SDK 내장 재시도 (429·5xx·연결 오류만)
+      fallbacks: true       # 서버 측 거절 대비 (Claude API 전용)
+    circuit-breaker:
+      failure-rate-threshold: 50
+      sliding-window-size: 10
+      minimum-number-of-calls: 4
+      open-duration: 30s
     consumer:
       concurrency: 2        # = 동시에 LLM 을 부르는 최대 수
     result-retention: 1d    # 처리 기록(llm:done) 보관 — 재전달돼도 LLM 을 다시 부르지 않음

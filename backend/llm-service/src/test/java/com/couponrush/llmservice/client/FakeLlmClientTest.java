@@ -16,8 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class FakeLlmClientTest {
 
-    private final FakeLlmClient client = new FakeLlmClient(
-            new LlmServiceProperties(Duration.ofDays(1), Duration.ofSeconds(10), new LlmServiceProperties.Fake(Duration.ZERO)));
+    private final FakeLlmClient client = new FakeLlmClient(TestProperties.withAnthropic(TestProperties.anthropic("unused")));
 
     private static EventCopyInput input(EventCopyTone tone, String keywords) {
         return new EventCopyInput(keywords, tone, 300,

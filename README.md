@@ -73,7 +73,8 @@ cd backend
 ### 2-1. (선택) LLM 서비스: llm-service (8081)
 
 관리자 **이벤트 문구 생성**을 쓸 때만 띄웁니다. 없어도 다른 기능은 모두 동작하고, 문구 생성 요청만 60초 뒤 실패(TIMEOUT)합니다.
-지금은 **fake 제공자**(API 키·비용 없음, 입력으로 정해진 문구 3개)로만 동작합니다.
+기본은 **fake 제공자**(API 키·비용 없음, 입력으로 정해진 문구 3개)입니다. 실제 Claude를 쓰려면 `infra/.env`에
+`LLM_PROVIDER=anthropic`과 `LLM_API_KEY=...`를 넣고 다시 띄웁니다 (호출마다 비용이 듭니다).
 
 ```powershell
 cd backend
@@ -150,6 +151,9 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 | `LLM_REQUEST_TIMEOUT` | `60s` | LLM 문구 생성 요청 마감. 이 안에 결과가 없으면 실패(TIMEOUT) |
 | `LLM_RATE_LIMIT_PER_MINUTE` | `5` | 관리자 1명의 분당 LLM 요청 한도 (넘으면 429) |
 | `LLM_RATE_LIMIT_PER_DAY` | `50` | 관리자 1명의 일일 LLM 요청 한도 (한국 자정 초기화) |
+| `LLM_PROVIDER` | `fake` | llm-service의 LLM 제공자: `fake`(키·비용 없음) \| `anthropic`. `anthropic`이어도 `LLM_API_KEY`가 비면 fake로 동작 |
+| `LLM_API_KEY` | (없음) | Anthropic API 키. **비밀값**, llm-service만 읽음 |
+| `LLM_MODEL` | `claude-sonnet-5-5` | 모델 ID (예: `claude-haiku-5-5`, `claude-opus-5-5`) |
 
 `.env`는 기동할 때만 읽습니다. 값을 바꾸면 `bootRun`(포트·DB 값이면 `docker compose`도)을 다시 시작하세요.
 

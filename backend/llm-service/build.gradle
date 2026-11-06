@@ -14,7 +14,15 @@ dependencies {
 	implementation 'org.springframework.kafka:spring-kafka'
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
+	// Anthropic 공식 Java SDK — 구조화된 출력, 거절(stop_reason=refusal), 사용 토큰, 상태코드별 예외를 그대로 쓴다.
+	// coupon-api 에는 절대 넣지 않는다 (LlmIsolationTest 가 검사)
+	implementation 'com.anthropic:anthropic-java:3.2.0'
+	// 서킷 브레이커 (코어만 — Spring Boot 스타터 없이 코드로 설정)
+	implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.2.0'
+
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	// 실제 Anthropic 대신 HTTP 응답을 흉내 낸다 (모든 테스트는 실제 API 를 부르지 않는다)
+	testImplementation 'org.wiremock:wiremock-standalone:3.9.2'
 	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
 	testImplementation 'org.springframework.kafka:spring-kafka-test'
 	testImplementation 'org.awaitility:awaitility'
