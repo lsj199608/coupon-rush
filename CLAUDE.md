@@ -94,6 +94,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - [x] 4) 실제 LLM: AnthropicLlmClient(공식 SDK 3.2.0, 기본 모델 claude-sonnet-5-5, effort low), 키 없으면 자동 fake,
         SDK 재시도 + Resilience4j 서킷 브레이커, 구조화된 출력 + 개수·길이 검증(1회 재생성), 거절 처리 — 아래 "Anthropic 제공자" 메모.
         테스트는 WireMock만 (실제 API 호출 없음 — 실제 키로 확인은 아직 안 함)
+  - [x] 5) 비용 통제: 응답 캐시(24h) + 일일 토큰 예산 50,000(LLM_DAILY_TOKEN_BUDGET) + 사용량 Redis 기록 — 아래 "비용 통제" 메모
   - [ ] 다음:
         4) 실제 LLM(Spring AI) + 타임아웃·재시도·서킷  5) 캐시·토큰 예산  6) V6 description  7) 프론트  8) compose·문서
 
@@ -529,6 +530,27 @@ llm-requests ─▶ LlmRequestConsumer (그룹 llm-service, concurrency 2 = 동�
 - 테스트: AnthropicLlmClientTest(WireMock, 실제 API 없음) — 요청 모양, 429 재시도 성공, 5xx 소진, 400 미재시도·서킷 미집계, 타임아웃,
   서킷 열림 후 HTTP 0회, 거절, 재생성 성공/실패, max_tokens, 깨진 JSON. LlmClientConfigTest — 제공자 선택.
 - **실제 API 키로 호출해 본 적은 아직 없다** (비용 발생 → 사용자 확인 후 수동 1회 예정).
+
+### 비용 통제 (7단계 5) — 응답 캐시 + 일일 토큰 예산
+llm-service 처리 순서(LlmRequestProcessor): llm:done → 마감 → llm:inflight → **⑤ 캐시** → **⑥ 예산** → ⑦ LLM 호출 → 사용량 기록 → 성공이면 캐시 저장
+
+| Redis 키 | 쓰는 쪽 | 내용 |
+|---|---|---|
+| `llm:cache:{sha256}` | llm-service | 성공 응답(후보 + 모델), TTL 24h. 키 = sha256(client.cacheIdentity() + 정규화 입력) |
+| `llm:usage:{yyyyMMdd}` (hash, 한국 날짜, TTL 8일) | llm-service 기록 / coupon-api 읽기 | total_tokens(예산 기준), input_tokens, output_tokens, calls, cache_hits, budget_rejections |
+
+- 캐시 키의 cacheIdentity: fake → `fake:v1`, Anthropic → `anthropic:{model}:{event-copy.v1}:effort={low}` — 모델·프롬프트 버전·effort가 바뀌면 예전 응답을 안 쓴다.
+  입력 정규화: 키워드 공백 정리 + 소문자. 키는 해시(관리자 입력이 키 이름에 드러나지 않게). 실패 결과는 캐시하지 않는다(일시 장애가 24시간 가지 않게).
+  regenerate=true("다시 생성")는 캐시를 읽지 않고, 새 결과로 덮어쓴다. 캐시 응답 = COMPLETED + cached=true + 토큰 0.
+- 캐시를 예산보다 먼저 본다 → 예산을 다 써도 같은 입력의 캐시 응답은 준다(비용 0).
+- 예산: 호출 전 total_tokens < 예산이면 호출, 호출 후 실제 사용량 HINCRBY (실패해도 쓴 토큰은 기록 — INVALID_OUTPUT 등).
+  **동시 처리 수(consumer concurrency 2)만큼 예산을 살짝 넘을 수 있다** — 최대 토큰을 미리 예약하면 남은 예산이 실제보다 훨씬 적게 보여 정상 요청까지 막혀서 택하지 않음.
+  초과 → LLM 호출 없이 FAILED(BUDGET_EXCEEDED, 재시도 불가 표시). Redis 장애로 예산 확인이 안 되면 호출하지 않는다(예외 → Kafka 재시도 → DLT).
+  캐시·사용량 "기록" 실패는 로그만 (결과를 버리지 않음).
+- coupon-api LlmBudgetGuard: 같은 키를 읽어 이미 소진이면 접수 단계에서 429 LLM_BUDGET_EXCEEDED (레이트 리밋 횟수·행·메시지를 쓰지 않음, 레이트 리밋보다 먼저).
+  키 규칙은 계약 모듈 LlmUsageKeys(두 서비스 공유). 예산 값은 두 서비스가 같은 LLM_DAILY_TOKEN_BUDGET을 읽는다.
+- 테스트: CostControlFlowTest(실제 Kafka·Redis, fake) — 캐시 적중·공백 차이·다시 생성·실패 미캐시, 토큰 기록·실패 토큰·예산 초과·49,999에서 호출·소진 후 캐시 제공.
+  ResponseCacheKeyTest(키 규칙), LlmUsageKeysTest(한국 날짜 경계), coupon-api LlmRequestApiTest(429 LLM_BUDGET_EXCEEDED).
 
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)

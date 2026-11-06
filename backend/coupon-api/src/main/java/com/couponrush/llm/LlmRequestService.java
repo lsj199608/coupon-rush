@@ -33,7 +33,7 @@ import java.util.concurrent.TimeoutException;
  * <p>
  * 순서가 중요하다:
  * <ol>
- *   <li>한도 초과면 아무것도 만들지 않고 429</li>
+ *   <li>오늘 토큰 예산이 이미 소진됐거나(LlmBudgetGuard) 사용자 한도 초과면 아무것도 만들지 않고 429</li>
  *   <li>PENDING 행을 <b>먼저 커밋</b> — 발행 후에 저장하면 결과가 행보다 먼저 도착해 조건부 UPDATE 가 0행이 되고 결과를 잃는다</li>
  *   <li>발행 후 브로커 ack 대기. 실패하면 FAILED(PUBLISH_FAILED) + 503</li>
  * </ol>
@@ -48,16 +48,18 @@ public class LlmRequestService {
 
     private final LlmRequestRepository repository;
     private final LlmRateLimiter rateLimiter;
+    private final LlmBudgetGuard budgetGuard;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final LlmProperties properties;
     private final Clock clock;
 
-    public LlmRequestService(LlmRequestRepository repository, LlmRateLimiter rateLimiter,
+    public LlmRequestService(LlmRequestRepository repository, LlmRateLimiter rateLimiter, LlmBudgetGuard budgetGuard,
                              KafkaTemplate<String, String> kafkaTemplate, ObjectMapper objectMapper,
                              LlmProperties properties, Clock clock) {
         this.repository = repository;
         this.rateLimiter = rateLimiter;
+        this.budgetGuard = budgetGuard;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.properties = properties;
@@ -67,6 +69,7 @@ public class LlmRequestService {
     public LlmRequestAcceptedResponse requestEventCopy(Long userId, EventCopyInput input, boolean regenerate) {
         // PostgreSQL TIMESTAMP 는 마이크로초까지 (Windows 시계는 100ns). 잘라 두지 않으면 메시지의 deadline 과 DB 의 deadline_at 이 미세하게 달라진다
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        budgetGuard.checkRemaining(now);      // 예산 소진이면 한도 횟수를 쓰기 전에 거절
         rateLimiter.acquire(userId, now);
 
         UUID requestId = UUID.randomUUID();

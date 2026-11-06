@@ -21,6 +21,7 @@ public final class TestProperties {
 
     public static LlmServiceProperties withAnthropic(LlmServiceProperties.Anthropic anthropic) {
         return new LlmServiceProperties("fake", Duration.ofDays(1), Duration.ofSeconds(10),
-                new LlmServiceProperties.Fake(Duration.ZERO), anthropic, breaker());
+                new LlmServiceProperties.Fake(Duration.ZERO), anthropic, breaker(),
+                new LlmServiceProperties.Budget(50_000), new LlmServiceProperties.Cache(true, Duration.ofHours(24)));
     }
 }

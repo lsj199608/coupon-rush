@@ -22,7 +22,26 @@ public record LlmServiceProperties(
         @DefaultValue("10s") Duration publishTimeout,
         @DefaultValue Fake fake,
         @DefaultValue Anthropic anthropic,
-        @DefaultValue CircuitBreaker circuitBreaker) {
+        @DefaultValue CircuitBreaker circuitBreaker,
+        @DefaultValue Budget budget,
+        @DefaultValue Cache cache) {
+
+    /**
+     * 일일 토큰 예산 (전체 서비스 합계, 한국 자정 초기화). 사용량은 Redis llm:usage:{yyyyMMdd} 에 기록한다.
+     * 판정은 "호출 전 사용량 &lt; 예산"이라 동시에 처리 중인 요청(최대 consumer concurrency 개)만큼 살짝 넘을 수 있다 —
+     * 정확히 막으려면 호출 전에 최대 토큰을 예약해야 하는데, 그러면 남은 예산이 실제보다 훨씬 적게 보여 정상 요청까지 거절된다.
+     *
+     * @param dailyTokens LLM_DAILY_TOKEN_BUDGET (기본 50,000)
+     */
+    public record Budget(@DefaultValue("50000") long dailyTokens) {
+    }
+
+    /**
+     * 응답 캐시 — 같은 입력·같은 모델·같은 프롬프트면 LLM 을 부르지 않고 이전 결과를 쓴다 (비용 0).
+     * "다시 생성"(regenerate=true)은 캐시를 읽지 않는다 (새 문구를 원하는 것이므로). 새 결과는 캐시를 덮어쓴다.
+     */
+    public record Cache(@DefaultValue("true") boolean enabled, @DefaultValue("24h") Duration ttl) {
+    }
 
     /** @param delay 응답 전 대기 (로컬에서 타임아웃·폴링 화면을 눈으로 확인할 때만. 기본 0) */
     public record Fake(@DefaultValue("0ms") Duration delay) {

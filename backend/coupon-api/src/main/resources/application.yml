@@ -127,6 +127,7 @@ app:
     rate-limit:
       per-minute: ${LLM_RATE_LIMIT_PER_MINUTE:5}  # 사용자별
       per-day: ${LLM_RATE_LIMIT_PER_DAY:50}
+    daily-token-budget: ${LLM_DAILY_TOKEN_BUDGET:50000}   # llm-service 와 같은 값. 이미 소진이면 접수 단계에서 429
     timeout-sweep:
       enabled: true
       interval: PT30S                             # 마감 지난 PENDING 정리 주기

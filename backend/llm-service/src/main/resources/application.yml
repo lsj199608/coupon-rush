@@ -49,6 +49,11 @@ app:
       timeout: 15s          # 요청 1회. SDK 재시도 2회까지 ≈ 45초 + 백오프 < 요청 마감 60초
       max-retries: 2        # SDK 내장 재시도 (429·5xx·연결 오류만)
       fallbacks: true       # 서버 측 거절 대비 (Claude API 전용)
+    budget:
+      daily-tokens: ${LLM_DAILY_TOKEN_BUDGET:50000}   # 전체 서비스 하루 토큰(입력+출력) 상한, 한국 자정 초기화. 넘으면 BUDGET_EXCEEDED
+    cache:
+      enabled: true
+      ttl: 24h              # 같은 입력·모델·프롬프트면 재사용 (다시 생성은 캐시를 건너뜀)
     circuit-breaker:
       failure-rate-threshold: 50
       sliding-window-size: 10

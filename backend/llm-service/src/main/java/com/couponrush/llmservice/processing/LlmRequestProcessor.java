@@ -3,6 +3,7 @@ package com.couponrush.llmservice.processing;
 import com.couponrush.llm.contract.LlmFailureReason;
 import com.couponrush.llm.contract.LlmRequestMessage;
 import com.couponrush.llm.contract.LlmResultMessage;
+import com.couponrush.llm.contract.LlmResultStatus;
 import com.couponrush.llm.contract.LlmTopics;
 import com.couponrush.llmservice.LlmServiceProperties;
 import com.couponrush.llmservice.client.LlmCallException;
@@ -37,7 +38,9 @@ public class LlmRequestProcessor {
     private static final Duration INFLIGHT_MARGIN = Duration.ofSeconds(60);
 
     /** 처리 결과 종류 (테스트·로그용) */
-    public enum Outcome { GENERATED, REPLAYED, SKIPPED_EXPIRED, SKIPPED_UNSUPPORTED_VERSION, SKIPPED_IN_PROGRESS }
+    public enum Outcome {
+        GENERATED, CACHED, BUDGET_REJECTED, REPLAYED, SKIPPED_EXPIRED, SKIPPED_UNSUPPORTED_VERSION, SKIPPED_IN_PROGRESS
+    }
 
     public record Processed(Outcome outcome, Optional<LlmResultMessage> result) {
         static Processed skipped(Outcome outcome) {
@@ -47,14 +50,18 @@ public class LlmRequestProcessor {
 
     private final LlmClient client;
     private final ProcessedRequestStore store;
+    private final ResponseCache cache;
+    private final UsageLedger usage;
     private final ObjectMapper objectMapper;
     private final LlmServiceProperties properties;
     private final Clock clock;
 
-    public LlmRequestProcessor(LlmClient client, ProcessedRequestStore store, ObjectMapper objectMapper,
-                               LlmServiceProperties properties, Clock clock) {
+    public LlmRequestProcessor(LlmClient client, ProcessedRequestStore store, ResponseCache cache, UsageLedger usage,
+                               ObjectMapper objectMapper, LlmServiceProperties properties, Clock clock) {
         this.client = client;
         this.store = store;
+        this.cache = cache;
+        this.usage = usage;
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.clock = clock;
@@ -83,12 +90,48 @@ public class LlmRequestProcessor {
             return Processed.skipped(Outcome.SKIPPED_IN_PROGRESS);
         }
         try {
-            LlmResultMessage result = generate(request, now);
-            store.saveResult(request.requestId(), toJson(result), properties.resultRetention());
-            return new Processed(Outcome.GENERATED, Optional.of(result));
+            Processed processed = cachedOrBudgetedOrGenerated(request, now);
+            processed.result().ifPresent(result ->
+                    store.saveResult(request.requestId(), toJson(result), properties.resultRetention()));
+            return processed;
         } finally {
             store.clearInflight(request.requestId());
         }
+    }
+
+    /**
+     * ⑤ 응답 캐시 (regenerate 가 아니면) → ⑥ 일일 예산 → ⑦ LLM 호출 → 사용량 기록 → 성공이면 캐시 저장.
+     * 캐시를 예산보다 먼저 보는 이유: 캐시 응답은 비용이 0이라 예산을 다 써도 줄 수 있다.
+     */
+    private Processed cachedOrBudgetedOrGenerated(LlmRequestMessage request, Instant now) {
+        String cacheKey = ResponseCache.key(client.cacheIdentity(), request.eventCopy());
+
+        if (!request.regenerate()) {
+            Optional<ResponseCache.Entry> cached = cache.find(cacheKey);
+            if (cached.isPresent()) {
+                usage.recordCacheHit(now);
+                log.info("응답 캐시 사용 — LLM 호출 안 함: requestId={}", request.requestId());
+                return new Processed(Outcome.CACHED, Optional.of(LlmResultMessage.completed(request.requestId(),
+                        cached.get().candidates(), cached.get().model(), 0, 0, true, elapsedMillis(now), clock.instant())));
+            }
+        }
+
+        if (!usage.hasRemaining(now)) {
+            usage.recordBudgetRejection(now);
+            log.warn("일일 토큰 예산 소진 — LLM 호출 안 함: requestId={}, used={}/{}",
+                    request.requestId(), usage.usedTokens(now), usage.dailyBudget());
+            return new Processed(Outcome.BUDGET_REJECTED, Optional.of(LlmResultMessage.failed(request.requestId(),
+                    LlmFailureReason.BUDGET_EXCEEDED, null, 0, 0, elapsedMillis(now), clock.instant())));
+        }
+
+        LlmResultMessage result = generate(request, now);
+        if (result.totalTokens() > 0) {
+            usage.recordCall(now, result.inputTokens(), result.outputTokens());
+        }
+        if (result.status() == LlmResultStatus.COMPLETED) {
+            cache.save(cacheKey, new ResponseCache.Entry(result.candidates(), result.model()));
+        }
+        return new Processed(Outcome.GENERATED, Optional.of(result));
     }
 
     private LlmResultMessage generate(LlmRequestMessage request, Instant startedAt) {

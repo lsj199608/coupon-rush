@@ -130,6 +130,11 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
                 model, inputTokens, outputTokens, null);
     }
 
+    @Override
+    public String cacheIdentity() {
+        return "anthropic:" + config.model() + ":" + PROMPT_VERSION + ":effort=" + config.effort();
+    }
+
     StructuredMessageCreateParams<EventCopyOutput> params(EventCopyInput input) {
         StructuredMessageCreateParams.Builder<EventCopyOutput> builder = MessageCreateParams.builder()
                 .model(config.model())

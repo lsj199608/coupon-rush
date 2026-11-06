@@ -41,13 +41,14 @@ class LlmRequestServiceTest {
 
     private final LlmRequestRepository repository = mock(LlmRequestRepository.class);
     private final LlmRateLimiter rateLimiter = mock(LlmRateLimiter.class);
+    private final LlmBudgetGuard budgetGuard = mock(LlmBudgetGuard.class);
     @SuppressWarnings("unchecked")
     private final KafkaTemplate<String, String> kafkaTemplate = mock(KafkaTemplate.class);
     private final LlmProperties properties = new LlmProperties(Duration.ofSeconds(60), Duration.ofMillis(100),
-            ZoneId.of("Asia/Seoul"), new LlmProperties.RateLimit(5, 50), new LlmProperties.TimeoutSweep(false, Duration.ofSeconds(30)));
+            ZoneId.of("Asia/Seoul"), new LlmProperties.RateLimit(5, 50), new LlmProperties.TimeoutSweep(false, Duration.ofSeconds(30)), 50_000);
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-    private final LlmRequestService service = new LlmRequestService(repository, rateLimiter, kafkaTemplate, objectMapper,
+    private final LlmRequestService service = new LlmRequestService(repository, rateLimiter, budgetGuard, kafkaTemplate, objectMapper,
             properties, Clock.fixed(NOW, ZoneOffset.UTC));
 
     private final EventCopyInput input = new EventCopyInput("봄맞이", EventCopyTone.FRIENDLY, 10, null, null);
@@ -59,7 +60,8 @@ class LlmRequestServiceTest {
 
         var accepted = service.requestEventCopy(1L, input, false);
 
-        InOrder order = inOrder(rateLimiter, repository, kafkaTemplate);
+        InOrder order = inOrder(budgetGuard, rateLimiter, repository, kafkaTemplate);
+        order.verify(budgetGuard).checkRemaining(NOW);
         order.verify(rateLimiter).acquire(1L, NOW);
         order.verify(repository).save(any(LlmRequest.class));
         order.verify(kafkaTemplate).send(eq(LlmTopics.REQUESTS), eq(accepted.requestId().toString()), anyString());
@@ -87,6 +89,18 @@ class LlmRequestServiceTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(ErrorCode.LLM_REQUEST_UNAVAILABLE);
         verify(repository).fail(any(), eq("PUBLISH_FAILED"), isNull(), anyInt(), anyInt(), any());
+    }
+
+    @Test
+    void 예산이_소진됐으면_한도_횟수도_쓰지_않고_거절한다() {
+        doThrow(new BusinessException(ErrorCode.LLM_BUDGET_EXCEEDED)).when(budgetGuard).checkRemaining(NOW);
+
+        assertThatThrownBy(() -> service.requestEventCopy(1L, input, false))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(ErrorCode.LLM_BUDGET_EXCEEDED);
+        verify(rateLimiter, never()).acquire(any(), any());
+        verify(repository, never()).save(any());
     }
 
     @Test

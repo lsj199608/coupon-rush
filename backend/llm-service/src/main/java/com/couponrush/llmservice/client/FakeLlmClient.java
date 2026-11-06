@@ -64,6 +64,11 @@ public class FakeLlmClient implements LlmClient {
         return new LlmCompletion(candidates.subList(0, LlmResultMessage.CANDIDATE_COUNT), MODEL, inputTokens, outputTokens);
     }
 
+    @Override
+    public String cacheIdentity() {
+        return "fake:v1";
+    }
+
     private static EventCopyCandidate candidate(String name, String description) {
         return new EventCopyCandidate(fit(name, EventCopyCandidate.NAME_MAX), fit(description, EventCopyCandidate.DESCRIPTION_MAX));
     }

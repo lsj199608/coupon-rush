@@ -12,6 +12,7 @@ import com.couponrush.llm.contract.LlmFailureReason;
 import com.couponrush.llm.contract.LlmRequestMessage;
 import com.couponrush.llm.contract.LlmResultMessage;
 import com.couponrush.llm.contract.LlmTopics;
+import com.couponrush.llm.contract.LlmUsageKeys;
 import com.couponrush.user.OAuth2Provider;
 import com.couponrush.user.Role;
 import com.couponrush.user.User;
@@ -389,6 +390,27 @@ class LlmRequestApiTest {
             requestEventCopy(adminToken, VALID_BODY)
                     .andExpect(status().isTooManyRequests())
                     .andExpect(jsonPath("$.code").value("LLM_DAILY_LIMIT_EXCEEDED"));
+        }
+
+        @Test
+        void 오늘_토큰_예산이_소진됐으면_429_LLM_BUDGET_EXCEEDED_이고_한도_횟수도_쓰지_않는다() throws Exception {
+            Instant now = Instant.now();
+            for (Instant t : List.of(now, now.plus(Duration.ofMinutes(1)))) {   // 자정 경계에도 결정적이도록
+                redisTemplate.opsForHash().put(LlmUsageKeys.usageKey(t), LlmUsageKeys.TOTAL_TOKENS, "50000");
+            }
+
+            requestEventCopy(adminToken, VALID_BODY)
+                    .andExpect(status().isTooManyRequests())
+                    .andExpect(jsonPath("$.code").value("LLM_BUDGET_EXCEEDED"));
+            assertThat(llmRequestRepository.count()).isZero();
+            assertThat(redisTemplate.keys("llm:rate:*")).isEmpty();
+        }
+
+        @Test
+        void 예산이_남아_있으면_접수한다() throws Exception {
+            redisTemplate.opsForHash().put(LlmUsageKeys.usageKey(Instant.now()), LlmUsageKeys.TOTAL_TOKENS, "49999");
+
+            requestEventCopy(adminToken, VALID_BODY).andExpect(status().isAccepted());
         }
 
         @Test

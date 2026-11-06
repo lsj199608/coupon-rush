@@ -15,4 +15,10 @@ public interface LlmClient {
      * @throws LlmCallException 실패 사유가 정해진 실패 (사유는 결과 메시지로 그대로 간다)
      */
     LlmCompletion generateEventCopy(EventCopyInput input);
+
+    /**
+     * 응답 캐시 키에 들어가는 "같은 출력을 낼 조건" — 제공자·모델·프롬프트 버전·생성 설정.
+     * 이 중 하나라도 바뀌면 캐시 키가 달라져 예전 응답을 재사용하지 않는다 (프롬프트를 고치면 캐시가 자연히 무효화).
+     */
+    String cacheIdentity();
 }

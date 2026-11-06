@@ -154,6 +154,7 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 | `LLM_PROVIDER` | `fake` | llm-service의 LLM 제공자: `fake`(키·비용 없음) \| `anthropic`. `anthropic`이어도 `LLM_API_KEY`가 비면 fake로 동작 |
 | `LLM_API_KEY` | (없음) | Anthropic API 키. **비밀값**, llm-service만 읽음 |
 | `LLM_MODEL` | `claude-sonnet-5-5` | 모델 ID (예: `claude-haiku-5-5`, `claude-opus-5-5`) |
+| `LLM_DAILY_TOKEN_BUDGET` | `50000` | 서비스 전체 하루 토큰(입력+출력) 예산, 한국 자정 초기화. 넘으면 문구 생성 거절 (같은 입력의 캐시 응답은 계속 제공) |
 
 `.env`는 기동할 때만 읽습니다. 값을 바꾸면 `bootRun`(포트·DB 값이면 `docker compose`도)을 다시 시작하세요.
 

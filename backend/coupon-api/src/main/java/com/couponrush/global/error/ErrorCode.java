@@ -44,6 +44,8 @@ public enum ErrorCode {
     LLM_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "요청이 너무 잦습니다. 1분 뒤에 다시 시도해 주세요."),
     /** 사용자별 일일 한도 초과 (기본 50회) — 내일 다시 */
     LLM_DAILY_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 문구 생성 횟수를 모두 사용했습니다. 내일 다시 시도해 주세요."),
+    /** 서비스 전체 일일 토큰 예산 소진 (기본 50,000) — 한국 자정에 초기화 */
+    LLM_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 문구 생성 예산을 모두 사용했습니다. 내일 다시 시도해 주세요."),
     /** llm-requests 발행이 확정되지 않음 (요청은 FAILED(PUBLISH_FAILED) 로 남는다) */
     LLM_REQUEST_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "문구 생성 요청을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.");
 
