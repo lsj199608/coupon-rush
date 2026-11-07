@@ -72,16 +72,17 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         완료 시간은 가장 많이 몰린 파티션이 결정(해시 충돌 주의), 파티션당 약 50건/s
   - 추가 개선 후보 (5단계 범위 밖, 필요할 때): **배치 컨슈머**(묶음 INSERT + issued_quantity +N + 커밋 1회 — 이벤트 1개의
     DB 반영 속도를 올리는 유일한 방법), Lua 안 XADD/PENDING으로 유령 발급 구간 제거, 오래된 PENDING 대조 워커, PENDING 기록 1왕복화
-- [ ] 6. React 화면 연동  ← 진행 중 — 아래 "프론트엔드 (6단계)" 섹션
+- [x] 6. React 화면 연동 — 아래 "프론트엔드 (6단계)" 섹션
   - [x] 프로젝트 세팅 + 로그인: Vite + React + TS, React Router, TanStack Query, axios. Vite 프록시(/api, /oauth2, /login/oauth2 → 8080)
         카카오/네이버/구글 로그인, AuthContext + ProtectedRoute, 헤더(닉네임·로그아웃), axios 인터셉터(Bearer 첨부, 401 → refresh → 재시도)
         백엔드: 로그인 성공 리다이렉트에서 access token 제거(URL에 토큰 없음) → 프론트가 refresh 쿠키로 access 획득
   - [x] 이벤트 목록(상태 뱃지) / 상세(기간·남은 수량·서버 시각 기준 카운트다운) / 발급(202 → 1초 폴링, 결과별 UI) / 내 쿠폰
         백엔드: GET /api/coupons 목록 추가, 응답에 status·serverTime, 남은 수량은 Redis 기준
   - [x] 관리자 이벤트 생성 폼(검증 + 생성 직후 Redis 재고 적재 확인), 모바일 반응형, 에러 바운더리, 404, 주요 흐름 테스트
-  - [ ] 남은 것: 실제 브라우저 수동 확인(로그인·발급·모바일 폭) 후 6단계 완료 표시, (선택) Playwright E2E
-- [ ] 7. LLM 기능  ← 진행 중. 설계: LLM은 별도 서비스(llm-service)로 분리, coupon-api ↔ llm-service는 Kafka 요청/응답,
-      DB는 coupon-api만(llm_requests), llm-service는 공개 포트 없음·LLM 키 단독 보유. Spring AI + Anthropic, 기본·테스트는 fake 제공자
+  - [x] 실제 브라우저 수동 확인(로그인·발급·관리자·모바일 폭) 2026-11-07 — docs/manual-check.md 기록표
+  - (선택, 미실시) Playwright E2E
+- [ ] 7. LLM 기능  ← 첫 기능(이벤트 문구 생성) 완료, 다음: 자연어 검색 → 챗봇. 설계: LLM은 별도 서비스(llm-service)로 분리, coupon-api ↔ llm-service는 Kafka 요청/응답,
+      DB는 coupon-api만(llm_requests), llm-service는 공개 포트 없음·LLM 키 단독 보유. Anthropic 공식 Java SDK, 기본·테스트는 fake 제공자
       (키 없으면 자동 fake). 레이트 리밋 사용자당 분 5회 / 일 50회, 마감 60초, 일일 토큰 예산 50,000(초과 시 거절, 사용량 Redis 기록).
       첫 기능: 관리자 이벤트 문구 생성 → 관리자가 확인·수정 후 저장 (V6 coupons.description, nullable)
   - [x] 0) Gradle 멀티모듈 전환: backend/src → backend/coupon-api/src (동작 변화 없음, 기존 테스트 전부 통과)
@@ -103,7 +104,11 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         **Kafka 데이터가 볼륨에 안 남던 1단계부터의 버그 수정**(KAFKA_LOG_DIRS), 수동 확인 절차 docs/manual-check.md.
         실제 확인: 이미지 빌드 → 4개 컨테이너 healthy → llm-requests 직접 발행 → 컨테이너가 kafka:29092 로 받아 COMPLETED 응답,
         kafka 컨테이너를 다시 만들어도 토픽 유지
-  - [ ] 남은 것: docs/manual-check.md 수동 확인(6단계 브라우저 확인 포함) → 6·7단계(첫 기능) 완료 표시. 이후 7단계 다음 기능(자연어 검색 → 챗봇)
+  - [x] 수동 확인 2026-11-07 (docs/manual-check.md A~G 모두 통과, fake 제공자): 로그인·발급·관리자 생성·AI 문구(캐시·한도)·
+        장애 격리(llm-service 중단 → TIMEOUT, 재기동 시 마감 지난 요청 건너뜀)·예산 초과·모바일 폭
+  - [ ] **실제 Claude API 호출은 아직 한 번도 확인 안 함** (H 미실행, 비용). 처음 anthropic으로 켤 때 manual-check H 절차로 1회 확인할 것 —
+        SDK의 Bearer 키 전달, fallbacks 형식, 구조화된 출력 스키마가 실제 API에서 통하는지
+  - [ ] 다음 기능: 자연어 검색 → 챗봇
 
 ## 결정 사항 / 메모
 
@@ -511,6 +516,8 @@ llm-results 컨슈머 (그룹 coupon-api-llm-results, 리스너 llmResultListene
 - 조회는 본인 요청만 (남의 requestId·없는 ID 모두 404 LLM_REQUEST_NOT_FOUND). requestedBy FK 없음(감사 기록).
 - 에러 코드: LLM_RATE_LIMITED(429, 분), LLM_DAILY_LIMIT_EXCEEDED(429, 일), LLM_REQUEST_UNAVAILABLE(503), LLM_REQUEST_NOT_FOUND(404).
 - Redis 키: llm:rate:{userId}:d:{yyyyMMdd} (TTL 2일), llm:rate:{userId}:m:{yyyyMMddHHmm} (TTL 2분). 거절된 요청은 세지 않는다.
+  **같은 입력(캐시로 끝나는 요청)도 1회로 센다** — 2026-11-07 결정: 그대로 둔다. coupon-api는 캐시 키(모델·프롬프트 버전)를 몰라 접수 시점에 구분할 수 없고,
+  한도는 비용뿐 아니라 요청 남발도 막는 용도. 대안(보류): 결과가 cached=true면 카운트 되돌리기 / 화면에서 직전 결과와 같은 입력이면 요청 안 함.
 - 격리: coupon-api는 :llm-contract만 의존. LlmIsolationTest가 spring-ai / anthropic / openai / langchain4j가 클래스패스에 없음을 검사.
   LlmRequestApiTest가 결과 리스너의 그룹·컨테이너·에러 핸들러가 발급 리스너와 다른지 검사. 테스트 정리: llm_requests 행, llm:* 키.
 - 아직 없음: 일일 토큰 예산(5단계, llm-service가 판정·기록), coupons.description(6단계).
