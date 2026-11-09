@@ -108,7 +108,21 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         장애 격리(llm-service 중단 → TIMEOUT, 재기동 시 마감 지난 요청 건너뜀)·예산 초과·모바일 폭
   - [ ] **실제 Claude API 호출은 아직 한 번도 확인 안 함** (H 미실행, 비용). 처음 anthropic으로 켤 때 manual-check H 절차로 1회 확인할 것 —
         SDK의 Bearer 키 전달, fallbacks 형식, 구조화된 출력 스키마가 실제 API에서 통하는지
-  - [ ] 다음 기능: 자연어 검색 → 챗봇
+  - [ ] 다음 기능: 자연어 검색 → MCP 도구 계층 → 챗봇(오케스트레이터) — 계획 2026-11-09 수립, 아직 시작 안 함.
+        설계는 아래 "LLM 다음 기능 계획" 메모. 순서·벡터 검색 포함 여부는 시작 전에 다시 확인
+    - [ ] 0) 사전: manual-check H로 실제 Claude 호출 1회 확인 (tool use가 실제 API 동작에 기대므로 먼저)
+    - [ ] A1) 계약: LlmRequestType.EVENT_SEARCH + 입력(질문)·출력(검색 필터: 키워드·기간·진행 상태·재고 있음)
+    - [ ] A2) llm-service: 구조화된 출력으로 필터 추출 (문구 생성 패턴 재사용) + fake
+    - [ ] A3) coupon-api: 필터 → SQL 검색, LLM 실패·타임아웃·예산 초과 시 키워드 검색 fallback
+    - [ ] A4) 프론트: 이벤트 목록 검색창
+    - [ ] B1) mcp-server 모듈 (별도 서비스, 공식 MCP Java SDK, Streamable HTTP) — 조회 전용 도구
+          search_events / get_event / get_my_coupons, coupon-api 기존 조회 API를 호출하는 어댑터
+    - [ ] B2) 인증: 서비스 토큰 + 사용자 ID는 서버가 주입 (모델이 userId를 인자로 고르지 못하게)
+    - [ ] B3) 수동 확인: Claude Code에 MCP 서버 연결해 도구 호출
+    - [ ] C1) coupon-api: V7 chat_sessions / chat_messages, 메시지 전송 API(202 + 폴링)
+    - [ ] C2) llm-service ChatOrchestrator: tool use 루프(MCP 클라이언트), 도구 호출 최대 5회·턴당 토큰 상한·마감, 기존 예산·레이트 리밋 재사용
+    - [ ] C3) fake 제공자 시나리오(도구 호출 → 결과 → 답변, 발급 요청 거절) 테스트
+    - [ ] C4) 프론트 채팅 위젯 (폴링, SSE는 나중)
 
 ## 결정 사항 / 메모
 
@@ -590,6 +604,27 @@ llm-service 처리 순서(LlmRequestProcessor): llm:done → 마감 → llm:infl
   키 규칙은 계약 모듈 LlmUsageKeys(두 서비스 공유). 예산 값은 두 서비스가 같은 LLM_DAILY_TOKEN_BUDGET을 읽는다.
 - 테스트: CostControlFlowTest(실제 Kafka·Redis, fake) — 캐시 적중·공백 차이·다시 생성·실패 미캐시, 토큰 기록·실패 토큰·예산 초과·49,999에서 호출·소진 후 캐시 제공.
   ResponseCacheKeyTest(키 규칙), LlmUsageKeysTest(한국 날짜 경계), coupon-api LlmRequestApiTest(429 LLM_BUDGET_EXCEEDED).
+
+### LLM 다음 기능 계획 (7단계 이후 기능, 2026-11-09 수립 — 미구현)
+```
+[Claude Code 등 외부 MCP 클라이언트] ─┐
+[llm-service ChatOrchestrator] ───────┴→ [mcp-server] ─REST→ [coupon-api] → DB
+[프론트] ─HTTP→ [coupon-api] ─Kafka 요청/응답→ [llm-service]
+```
+- 자연어 검색: LLM은 질문 → 검색 필터 추출만, 실제 조회는 DB. 없는 이벤트를 지어낼 수 없고 결과 검증이 쉽다.
+  검색은 AI 없이도 동작해야 하므로 LLM 실패 시 키워드 검색 fallback.
+- MCP 서버는 별도 서비스(mcp-server). 처음엔 coupon-api 안 /mcp를 생각했으나 MSA 관점에서 변경 —
+  선착순 발급을 처리하는 핵심 서비스에 AI용 프로토콜·트래픽·보안 노출면을 넣지 않는다(llm-service 격리와 같은 원칙).
+  MCP는 도메인 로직 없는 프로토콜 어댑터(API Gateway/BFF 역할). 서비스가 늘어나도 창구 하나로 묶는다.
+  llm-service에 두지 않는 이유: 도구를 "쓰는" 쪽이고 공개 포트가 없어 외부 클라이언트가 붙을 수 없다.
+- 도구는 전부 조회 전용. 챗봇이 "발급해줘"를 받으면 이벤트 페이지 링크로 안내만 (발급 경로 LLM 금지 규칙).
+- 오케스트레이터 = llm-service 안 단일 에이전트 tool use 루프. 멀티 에이전트(라우터 + 전문 에이전트)는 도구 3개 규모에선
+  복잡도·비용만 늘어 제외, 도구가 늘면 재검토.
+- fake 제공자로도 오케스트레이터 전체 흐름(Kafka·MCP·DB 조회·제한)은 실제로 동작한다. fake는 LLM 판단만 규칙으로 대신
+  (키워드 → 도구 호출, 도구 결과 → 템플릿 답변). 도구 선택 품질·답변 자연스러움은 실제 키로 마지막에 확인.
+- 벡터 검색(pgvector 임베딩)은 보류: Anthropic에 임베딩 API가 없어 별도 제공자(Voyage 등)나 로컬 모델이 필요하고,
+  이벤트 수가 적은 지금은 필터 추출로 충분. 의미 검색("커피 할인" → "아메리카노 쿠폰")이 필요해지면
+  필터로 좁히고 벡터 유사도로 정렬하는 하이브리드로 추가.
 
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)
