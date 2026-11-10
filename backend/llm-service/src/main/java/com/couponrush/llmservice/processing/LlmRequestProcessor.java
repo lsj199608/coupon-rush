@@ -2,6 +2,7 @@ package com.couponrush.llmservice.processing;
 
 import com.couponrush.llm.contract.LlmFailureReason;
 import com.couponrush.llm.contract.LlmRequestMessage;
+import com.couponrush.llm.contract.LlmRequestType;
 import com.couponrush.llm.contract.LlmResultMessage;
 import com.couponrush.llm.contract.LlmResultStatus;
 import com.couponrush.llm.contract.LlmTopics;
@@ -105,6 +106,13 @@ public class LlmRequestProcessor {
      * (단 이미 소진된 뒤의 새 요청은 coupon-api LlmBudgetGuard 가 접수 단계에서 먼저 막는다 — 여기 오는 것은 접수 후 소진된 경우)
      */
     private Processed cachedOrBudgetedOrGenerated(LlmRequestMessage request, Instant now) {
+        if (request.type() != LlmRequestType.EVENT_COPY) {
+            // 계약에는 있지만 이 서비스가 아직 처리하지 못하는 기능 (EVENT_SEARCH 는 7단계 A2 에서 구현).
+            // 캐시 키·예산 계산 전에 FAILED 로 끝낸다 — 예외를 올리면 Kafka 재시도·DLT 로 가고, 기다리는 사람은 마감까지 대기한다
+            log.warn("아직 지원하지 않는 요청 종류 — LLM 호출 안 함: requestId={}, type={}", request.requestId(), request.type());
+            return new Processed(Outcome.GENERATED, Optional.of(LlmResultMessage.failed(request.requestId(),
+                    LlmFailureReason.LLM_UNAVAILABLE, null, 0, 0, elapsedMillis(now), clock.instant())));
+        }
         String cacheKey = ResponseCache.key(client.cacheIdentity(), request.eventCopy());
 
         if (!request.regenerate()) {
@@ -139,6 +147,7 @@ public class LlmRequestProcessor {
         try {
             LlmCompletion completion = switch (request.type()) {
                 case EVENT_COPY -> client.generateEventCopy(request.eventCopy());
+                case EVENT_SEARCH -> throw new IllegalStateException("EVENT_SEARCH 는 위에서 이미 걸러진다");
             };
             return LlmResultMessage.completed(request.requestId(), completion.candidates(), completion.model(),
                     completion.inputTokens(), completion.outputTokens(), false, elapsedMillis(startedAt), clock.instant());

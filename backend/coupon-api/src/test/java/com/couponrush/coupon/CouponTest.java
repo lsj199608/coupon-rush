@@ -52,6 +52,13 @@ class CouponTest {
     }
 
     @Test
+    void 진행_상태_이름은_LLM_검색_조건의_상태와_같다_검색_조건을_그대로_변환할_수_있다() {
+        assertThat(java.util.Arrays.stream(CouponStatus.values()).map(Enum::name))
+                .containsExactlyElementsOf(java.util.Arrays.stream(
+                        com.couponrush.llm.contract.EventSearchStatus.values()).map(Enum::name).toList());
+    }
+
+    @Test
     void 잘못된_값으로는_생성할_수_없다() {
         assertThatThrownBy(() -> Coupon.create(" ", 1, START, END)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> Coupon.create("쿠폰", 0, START, END)).isInstanceOf(IllegalArgumentException.class);

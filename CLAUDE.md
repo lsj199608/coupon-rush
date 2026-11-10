@@ -109,9 +109,11 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - [ ] **실제 Claude API 호출은 아직 한 번도 확인 안 함** (H 미실행, 비용). 처음 anthropic으로 켤 때 manual-check H 절차로 1회 확인할 것 —
         SDK의 Bearer 키 전달, fallbacks 형식, 구조화된 출력 스키마가 실제 API에서 통하는지
   - [ ] 다음 기능: 자연어 검색 → MCP 도구 계층 → 챗봇(오케스트레이터) — 계획 2026-11-09 수립, 아직 시작 안 함.
-        설계는 아래 "LLM 다음 기능 계획" 메모. 순서·벡터 검색 포함 여부는 시작 전에 다시 확인
-    - [ ] 0) 사전: manual-check H로 실제 Claude 호출 1회 확인 (tool use가 실제 API 동작에 기대므로 먼저)
-    - [ ] A1) 계약: LlmRequestType.EVENT_SEARCH + 입력(질문)·출력(검색 필터: 키워드·기간·진행 상태·재고 있음)
+        설계는 아래 "LLM 다음 기능 계획" 메모. 2026-11-10 결정: 순서 A → B → C, 벡터 검색 없이, API 키 없음(fake로 진행)
+    - [ ] 0) 사전: manual-check H로 실제 Claude 호출 1회 확인 — API 키가 없어 **C2(tool use) 전까지 미룸**
+    - [x] A1) 계약: LlmRequestType.EVENT_SEARCH, EventSearchInput(query ≤ 200), 결과 searchFilter = EventSearchFilter
+          (keywords ≤ 5개·각 50자, statuses, start/end 범위 [from, to), availableOnly), EventSearchStatus(= CouponStatus 이름, CouponTest 검사),
+          V7 ck_llm_requests_type에 EVENT_SEARCH. llm-service는 A2 전까지 EVENT_SEARCH를 바로 FAILED(LLM_UNAVAILABLE) — 아래 "LLM 메시지 계약" 메모
     - [ ] A2) llm-service: 구조화된 출력으로 필터 추출 (문구 생성 패턴 재사용) + fake
     - [ ] A3) coupon-api: 필터 → SQL 검색, LLM 실패·타임아웃·예산 초과 시 키워드 검색 fallback
     - [ ] A4) 프론트: 이벤트 목록 검색창
@@ -119,7 +121,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           search_events / get_event / get_my_coupons, coupon-api 기존 조회 API를 호출하는 어댑터
     - [ ] B2) 인증: 서비스 토큰 + 사용자 ID는 서버가 주입 (모델이 userId를 인자로 고르지 못하게)
     - [ ] B3) 수동 확인: Claude Code에 MCP 서버 연결해 도구 호출
-    - [ ] C1) coupon-api: V7 chat_sessions / chat_messages, 메시지 전송 API(202 + 폴링)
+    - [ ] C1) coupon-api: V8 chat_sessions / chat_messages (V7은 A1에서 사용), 메시지 전송 API(202 + 폴링)
     - [ ] C2) llm-service ChatOrchestrator: tool use 루프(MCP 클라이언트), 도구 호출 최대 5회·턴당 토큰 상한·마감, 기존 예산·레이트 리밋 재사용
     - [ ] C3) fake 제공자 시나리오(도구 호출 → 결과 → 답변, 발급 요청 거절) 테스트
     - [ ] C4) 프론트 채팅 위젯 (폴링, SSE는 나중)
@@ -493,8 +495,8 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 
 | 토픽 | 방향 | 키 | 값 |
 |---|---|---|---|
-| `llm-requests` | coupon-api → llm-service | requestId | `LlmRequestMessage(schemaVersion, requestId, type, requestedBy, requestedAt, deadline, regenerate, eventCopy)` |
-| `llm-results` | llm-service → coupon-api | requestId | `LlmResultMessage(schemaVersion, requestId, status, candidates, failureReason, model, inputTokens, outputTokens, cached, latencyMs, completedAt)` |
+| `llm-requests` | coupon-api → llm-service | requestId | `LlmRequestMessage(schemaVersion, requestId, type, requestedBy, requestedAt, deadline, regenerate, eventCopy, eventSearch)` |
+| `llm-results` | llm-service → coupon-api | requestId | `LlmResultMessage(schemaVersion, requestId, status, candidates, searchFilter, failureReason, model, inputTokens, outputTokens, cached, latencyMs, completedAt)` |
 | `llm-requests.DLT` | | | 역직렬화 불가 요청만. LLM 실패는 FAILED 결과로 돌려준다 (재시도 = 비용) |
 
 - 진화 규칙: 필드는 **추가만** (모든 레코드 @JsonIgnoreProperties(ignoreUnknown=true) → 먼저 배포된 쪽이 새 필드를 무시).
@@ -506,6 +508,12 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 - LlmFailureReason 하나에 llm-service 사유(LLM_UNAVAILABLE, BUDGET_EXCEEDED, INVALID_OUTPUT, CONTENT_REFUSED)와
   coupon-api 사유(TIMEOUT, PUBLISH_FAILED)를 함께 둔다 — DB와 화면 메시지가 한 목록을 기준으로. isRetryable = [다시 시도] 노출 기준.
 - 실패 결과에도 쓴 토큰을 싣는다 (INVALID_OUTPUT처럼 호출 후 실패해도 비용은 나갔으므로 예산에 잡아야 함).
+- 자연어 검색(A1, 2026-11-10): 요청은 type에 맞는 입력 **하나만**(eventCopy XOR eventSearch, 둘 다면 거절).
+  결과에는 type이 없다 — coupon-api가 requestId로 자기 행의 type을 안다. 대신 COMPLETED는 candidates(1~3) XOR searchFilter.
+  LLM은 **검색 조건만** 만들고 조회는 coupon-api DB가 한다(없는 이벤트를 지어낼 수 없음). 조건은 모두 AND, 빈 조건 = 제한 없음,
+  전부 비어도 COMPLETED(isEmpty, JSON에는 안 실림 — 어떻게 보여 줄지는 coupon-api가 정함). 기간은 발급 기간 기준 [from, to).
+  "이번 주" 같은 상대 시각은 requestedAt(한국 시각) 기준 — 기준 시각 필드를 따로 두지 않음. 검색은 regenerate 항상 false.
+  새 필드는 끝/중간에 추가했지만 JSON은 이름으로 읽으므로 호환 (이전 메시지 = null). 단 **레코드 전체 생성자를 직접 쓰는 테스트는 인자 추가 필요**.
 - LlmContractJsonTest: 왕복 직렬화, **필드 이름 고정**(바꾸면 실패 — 의도한 변경이면 버전과 함께 고친다), 고정 JSON 읽기,
   모르는 필드 무시(FAIL_ON_UNKNOWN_PROPERTIES=true인 엄격한 mapper로 검증), 빠진 선택 필드 기본값, 규칙 위반 거절.
 

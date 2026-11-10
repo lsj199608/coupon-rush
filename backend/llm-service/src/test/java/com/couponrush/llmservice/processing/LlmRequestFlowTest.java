@@ -206,7 +206,7 @@ class LlmRequestFlowTest {
     void 모르는_스키마_버전은_처리하지_않는다() throws Exception {
         LlmRequestMessage future = new LlmRequestMessage(99, UUID.randomUUID(),
                 com.couponrush.llm.contract.LlmRequestType.EVENT_COPY, 7L, Instant.now(), Instant.now().plusSeconds(60),
-                false, new EventCopyInput("미래", EventCopyTone.FRIENDLY, 1, null, null));
+                false, new EventCopyInput("미래", EventCopyTone.FRIENDLY, 1, null, null), null);
         LlmRequestMessage marker = freshRequest();
 
         send("same-key-2", objectMapper.writeValueAsString(future));

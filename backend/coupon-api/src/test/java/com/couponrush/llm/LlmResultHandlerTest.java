@@ -89,7 +89,7 @@ class LlmResultHandlerTest {
     void 지원하지_않는_스키마_버전은_반영하지_않는다() {
         UUID id = pending();
         LlmResultMessage future = new LlmResultMessage(99, id, LlmResultStatus.COMPLETED,
-                List.of(new EventCopyCandidate("미래", "버전")), null, "fake", 0, 0, false, 0, Instant.now());
+                List.of(new EventCopyCandidate("미래", "버전")), null, null, "fake", 0, 0, false, 0, Instant.now());
 
         assertThat(handler.handle(future)).isEqualTo(IGNORED_UNSUPPORTED_VERSION);
         assertThat(repository.findById(id).orElseThrow().getStatus()).isEqualTo(LlmRequestStatus.PENDING);
