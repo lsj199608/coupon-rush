@@ -2,6 +2,8 @@ package com.couponrush.llmservice.processing;
 
 import com.couponrush.llm.contract.EventCopyInput;
 import com.couponrush.llm.contract.EventCopyTone;
+import com.couponrush.llm.contract.EventSearchInput;
+import com.couponrush.llm.contract.EventSearchStatus;
 import com.couponrush.llm.contract.LlmFailureReason;
 import com.couponrush.llm.contract.LlmRequestMessage;
 import com.couponrush.llm.contract.LlmResultMessage;
@@ -120,6 +122,25 @@ class LlmRequestFlowTest {
         assertThat(result.totalTokens()).isPositive();
         assertThat(result.cached()).isFalse();
         verify(llmClient, times(1)).generateEventCopy(any());
+    }
+
+    @Test
+    void 검색_요청은_검색_조건을_결과로_보낸다() throws Exception {
+        Instant now = Instant.now();
+        LlmRequestMessage request = LlmRequestMessage.eventSearch(UUID.randomUUID(), 7L, now, now.plusSeconds(60),
+                new EventSearchInput("진행 중인 커피 이벤트 남은 거"));
+
+        send(request);
+
+        LlmResultMessage result = awaitResults(request.requestId(), 1).get(0);
+        assertThat(result.status()).isEqualTo(LlmResultStatus.COMPLETED);
+        assertThat(result.candidates()).isEmpty();
+        assertThat(result.searchFilter().keywords()).containsExactly("커피");
+        assertThat(result.searchFilter().statuses()).containsExactly(EventSearchStatus.OPEN);
+        assertThat(result.searchFilter().availableOnly()).isTrue();
+        assertThat(result.totalTokens()).isPositive();
+        verify(llmClient, times(1)).extractSearchFilter(any(), any());
+        verify(llmClient, never()).generateEventCopy(any());
     }
 
     @Test

@@ -2,17 +2,21 @@ package com.couponrush.llmservice.client;
 
 import com.couponrush.llm.contract.EventCopyCandidate;
 import com.couponrush.llm.contract.EventCopyInput;
+import com.couponrush.llm.contract.EventSearchFilter;
+import com.couponrush.llm.contract.EventSearchInput;
+import com.couponrush.llm.contract.LlmRequestType;
 import com.couponrush.llm.contract.LlmResultMessage;
 import com.couponrush.llmservice.LlmServiceProperties;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 /**
- * 가짜 제공자: 네트워크·API 키·비용 없이 입력으로부터 <b>항상 같은</b> 후보 3개를 만든다.
+ * 가짜 제공자: 네트워크·API 키·비용 없이 입력으로부터 <b>항상 같은</b> 결과를 만든다 (문구 후보 3개, 검색 조건은 {@link FakeEventSearch} 규칙).
  * 기본 제공자이자 모든 자동 테스트의 제공자 — 실제 모델의 품질이 아니라 "흐름"(요청 → 폴링 → 결과 → 폼 채우기)을 확인하기 위한 것.
  * 토큰 수도 글자 수로 흉내 내서 (5단계) 예산 로직을 실제처럼 검증할 수 있게 한다.
  */
@@ -65,8 +69,21 @@ public class FakeLlmClient implements LlmClient {
     }
 
     @Override
-    public String cacheIdentity() {
-        return "fake:v1";
+    public LlmSearchCompletion extractSearchFilter(EventSearchInput input, LocalDate today) {
+        pause();
+        EventSearchFilter filter = FakeEventSearch.extract(input.query(), today);
+        int inputTokens = 80 + input.query().length() / 2;
+        int outputTokens = 20 + filter.keywords().size() * 5;
+        return new LlmSearchCompletion(filter, MODEL, inputTokens, outputTokens);
+    }
+
+    @Override
+    public String cacheIdentity(LlmRequestType type) {
+        // 문구 생성은 기존 값 그대로 — 바꾸면 이미 쌓인 캐시가 쓸모없어진다
+        return switch (type) {
+            case EVENT_COPY -> "fake:v1";
+            case EVENT_SEARCH -> "fake:search.v1";
+        };
     }
 
     private static EventCopyCandidate candidate(String name, String description) {

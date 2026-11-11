@@ -18,12 +18,17 @@ import com.anthropic.models.messages.StructuredMessage;
 import com.anthropic.models.messages.StructuredMessageCreateParams;
 import com.anthropic.models.messages.StructuredOutputConfig;
 import com.anthropic.models.messages.StructuredTextBlock;
+import com.couponrush.llm.contract.EventCopyCandidate;
 import com.couponrush.llm.contract.EventCopyInput;
+import com.couponrush.llm.contract.EventSearchFilter;
+import com.couponrush.llm.contract.EventSearchInput;
 import com.couponrush.llm.contract.LlmFailureReason;
+import com.couponrush.llm.contract.LlmRequestType;
 import com.couponrush.llmservice.LlmServiceProperties;
 import com.couponrush.llmservice.client.LlmCallException;
 import com.couponrush.llmservice.client.LlmClient;
 import com.couponrush.llmservice.client.LlmCompletion;
+import com.couponrush.llmservice.client.LlmSearchCompletion;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -37,12 +42,17 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.TextStyle;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 /**
  * Anthropic(Claude) 제공자. 공식 Java SDK 로 Messages API 를 한 번(필요하면 재생성 한 번 더) 부른다.
@@ -53,14 +63,21 @@ import java.util.concurrent.TimeUnit;
  *   <li>거절(stop_reason=refusal): CONTENT_REFUSED. 서버 측 fallbacks("default")가 켜져 있으면 일부 범주는 API 가 다른 모델로 먼저 재시도한다</li>
  *   <li>출력 검증 실패·max_tokens 로 잘림: 1회 재생성, 그래도 실패면 INVALID_OUTPUT (두 번의 토큰을 모두 보고 → 예산에 반영)</li>
  * </ul>
- * 프롬프트 인젝션: 관리자 입력은 &lt;event_input&gt; 안의 JSON 데이터로만 넣고, 시스템 프롬프트가 그 안의 지시를 따르지 말라고 못박는다.
- * 결과는 제안일 뿐이고 관리자가 확인·수정한 뒤에만 저장된다.
+ * 기능은 두 가지이고 위 처리(재시도·서킷·거절·재생성)는 {@link #generate} 하나를 함께 쓴다 — 프롬프트·출력 형식·검증기만 다르다.
+ * <ul>
+ *   <li>문구 생성(EVENT_COPY): event-copy 프롬프트 → {@link EventCopyOutput} → 후보 3개</li>
+ *   <li>자연어 검색(EVENT_SEARCH): event-search 프롬프트 → {@link EventSearchOutput} → 검색 조건 (이벤트 목록이 아님)</li>
+ * </ul>
+ * 프롬프트 인젝션: 사용자 입력은 &lt;event_input&gt; / &lt;search_input&gt; 안의 JSON 데이터로만 넣고,
+ * 시스템 프롬프트가 그 안의 지시를 따르지 말라고 못박는다. 문구는 관리자가 확인·수정한 뒤에만 저장되고,
+ * 검색 조건은 검증기를 통과한 값만 DB 조회에 쓰인다 (조건 밖의 일은 할 수 없다).
  */
 public class AnthropicLlmClient implements LlmClient, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(AnthropicLlmClient.class);
 
     static final String PROMPT_VERSION = "event-copy.v1";
+    static final String SEARCH_PROMPT_VERSION = "event-search.v1";
     static final String FALLBACK_BETA = "server-side-fallback-2026-07-01";
     private static final int MAX_ATTEMPTS = 2;   // 최초 1회 + 출력 검증 실패 시 재생성 1회
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
@@ -70,13 +87,15 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
     private final LlmServiceProperties.Anthropic config;
     private final CircuitBreaker circuitBreaker;
     private final ObjectMapper objectMapper;
-    private final String systemPrompt;
+    private final String copyPrompt;
+    private final String searchPrompt;
 
     public AnthropicLlmClient(LlmServiceProperties.Anthropic config, LlmServiceProperties.CircuitBreaker breaker,
                               ObjectMapper objectMapper) {
         this.config = config;
         this.objectMapper = objectMapper;
-        this.systemPrompt = loadPrompt();
+        this.copyPrompt = loadPrompt(PROMPT_VERSION);
+        this.searchPrompt = loadPrompt(SEARCH_PROMPT_VERSION);
         this.client = AnthropicOkHttpClient.builder()
                 .apiKey(config.apiKey())
                 .baseUrl(config.baseUrl())
@@ -97,14 +116,47 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
 
     @Override
     public LlmCompletion generateEventCopy(EventCopyInput input) {
-        StructuredMessageCreateParams<EventCopyOutput> params = params(input);
+        Generated<List<EventCopyCandidate>> generated = generate(params(input), output -> {
+            EventCopyOutputValidator.Result result = EventCopyOutputValidator.validate(output);
+            return result.valid() ? Validated.ok(result.candidates()) : Validated.invalid(result.problem());
+        });
+        return new LlmCompletion(generated.value(), generated.model(), generated.inputTokens(), generated.outputTokens());
+    }
+
+    @Override
+    public LlmSearchCompletion extractSearchFilter(EventSearchInput input, LocalDate today) {
+        Generated<EventSearchFilter> generated = generate(searchParams(input, today), output -> {
+            EventSearchOutputValidator.Result result = EventSearchOutputValidator.validate(output);
+            return result.valid() ? Validated.ok(result.filter()) : Validated.invalid(result.problem());
+        });
+        return new LlmSearchCompletion(generated.value(), generated.model(), generated.inputTokens(), generated.outputTokens());
+    }
+
+    /** 검증 결과: 통과하면 value, 아니면 problem (재생성 대상) */
+    private record Validated<R>(R value, String problem) {
+        static <R> Validated<R> ok(R value) {
+            return new Validated<>(value, null);
+        }
+
+        static <R> Validated<R> invalid(String problem) {
+            return new Validated<>(null, problem);
+        }
+    }
+
+    private record Generated<R>(R value, String model, int inputTokens, int outputTokens) {
+    }
+
+    /**
+     * 호출 → 거절이면 CONTENT_REFUSED → 잘림·검증 실패면 1회 재생성 → 그래도면 INVALID_OUTPUT. 토큰은 모든 시도를 합산한다.
+     */
+    private <T, R> Generated<R> generate(StructuredMessageCreateParams<T> params, Function<T, Validated<R>> validator) {
         int inputTokens = 0;
         int outputTokens = 0;
         String model = config.model();
         String lastProblem = null;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            StructuredMessage<EventCopyOutput> message = call(params, model, inputTokens, outputTokens);
+            StructuredMessage<T> message = call(params, model, inputTokens, outputTokens);
             inputTokens += (int) message.usage().inputTokens();
             outputTokens += (int) message.usage().outputTokens();
             model = message.model().asString();   // 서버 측 fallback 이 일어나면 실제로 답한 모델이 다르다
@@ -118,9 +170,9 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
             if (stop.isPresent() && stop.get().equals(StopReason.MAX_TOKENS)) {
                 lastProblem = "max_tokens(" + config.maxTokens() + ")에서 잘림";
             } else {
-                EventCopyOutputValidator.Result result = EventCopyOutputValidator.validate(parse(message));
-                if (result.valid()) {
-                    return new LlmCompletion(result.candidates(), model, inputTokens, outputTokens);
+                Validated<R> result = validator.apply(parse(message));
+                if (result.problem() == null) {
+                    return new Generated<>(result.value(), model, inputTokens, outputTokens);
                 }
                 lastProblem = result.problem();
             }
@@ -131,20 +183,33 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
     }
 
     @Override
-    public String cacheIdentity() {
-        return "anthropic:" + config.model() + ":" + PROMPT_VERSION + ":effort=" + config.effort();
+    public String cacheIdentity(LlmRequestType type) {
+        String prompt = switch (type) {
+            case EVENT_COPY -> PROMPT_VERSION;   // 기존 값 그대로 — 이미 쌓인 문구 캐시를 유지
+            case EVENT_SEARCH -> SEARCH_PROMPT_VERSION;
+        };
+        return "anthropic:" + config.model() + ":" + prompt + ":effort=" + config.effort();
     }
 
     StructuredMessageCreateParams<EventCopyOutput> params(EventCopyInput input) {
-        StructuredMessageCreateParams.Builder<EventCopyOutput> builder = MessageCreateParams.builder()
+        return build(copyPrompt, EventCopyOutput.class, "<event_input>\n" + inputJson(input) + "\n</event_input>");
+    }
+
+    StructuredMessageCreateParams<EventSearchOutput> searchParams(EventSearchInput input, LocalDate today) {
+        return build(searchPrompt, EventSearchOutput.class, "<search_input>\n" + searchJson(input, today) + "\n</search_input>");
+    }
+
+    /** 두 기능 공통 요청 설정 — 모델·max_tokens·effort·구조화된 출력·fallbacks */
+    private <T> StructuredMessageCreateParams<T> build(String system, Class<T> outputType, String userMessage) {
+        StructuredMessageCreateParams.Builder<T> builder = MessageCreateParams.builder()
                 .model(config.model())
                 .maxTokens(config.maxTokens())
-                .system(systemPrompt)
-                .outputConfig(StructuredOutputConfig.<EventCopyOutput>builder()
+                .system(system)
+                .outputConfig(StructuredOutputConfig.<T>builder()
                         .effort(OutputConfig.Effort.of(config.effort()))
-                        .format(EventCopyOutput.class, JsonSchemaLocalValidation.YES)
+                        .format(outputType, JsonSchemaLocalValidation.YES)
                         .build())
-                .addUserMessage("<event_input>\n" + inputJson(input) + "\n</event_input>");
+                .addUserMessage(userMessage);
         if (config.fallbacks()) {
             builder.putAdditionalHeader("anthropic-beta", FALLBACK_BETA)
                     .putAdditionalBodyProperty("fallbacks", JsonValue.from("default"));
@@ -156,15 +221,15 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
      * 한 번의 API 호출 (SDK 가 429·5xx·연결 오류를 maxRetries 만큼 재시도한 뒤의 최종 결과).
      * 실패는 모두 LLM_UNAVAILABLE — 다만 서킷 브레이커에는 "제공자 쪽 문제"만 실패로 센다.
      */
-    private StructuredMessage<EventCopyOutput> call(StructuredMessageCreateParams<EventCopyOutput> params, String model,
-                                                    int inputTokens, int outputTokens) {
+    private <T> StructuredMessage<T> call(StructuredMessageCreateParams<T> params, String model,
+                                          int inputTokens, int outputTokens) {
         if (!circuitBreaker.tryAcquirePermission()) {
             throw new LlmCallException(LlmFailureReason.LLM_UNAVAILABLE, "서킷 브레이커 열림 — 호출하지 않음",
                     model, inputTokens, outputTokens, null);
         }
         long start = System.nanoTime();
         try {
-            StructuredMessage<EventCopyOutput> message = client.messages().create(params);
+            StructuredMessage<T> message = client.messages().create(params);
             circuitBreaker.onSuccess(System.nanoTime() - start, TimeUnit.NANOSECONDS);
             return message;
         } catch (BadRequestException | UnprocessableEntityException e) {
@@ -190,7 +255,7 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
     }
 
     /** 구조화된 출력을 레코드로 읽는다. 형식이 깨졌으면 null → 검증 실패로 처리 (재생성 대상) */
-    private EventCopyOutput parse(StructuredMessage<EventCopyOutput> message) {
+    private <T> T parse(StructuredMessage<T> message) {
         try {
             return message.content().stream()
                     .flatMap(block -> block.text().stream())
@@ -218,6 +283,19 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
         }
     }
 
+    /** 검색 입력 — 상대 날짜 계산의 기준은 오늘 날짜·요일만 준다 (시각을 주면 같은 날 같은 질문의 조건이 달라질 수 있다) */
+    private String searchJson(EventSearchInput input, LocalDate today) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("query", input.query());
+        data.put("today", today.toString());
+        data.put("weekday", today.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.KOREAN));
+        try {
+            return objectMapper.writeValueAsString(data);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("프롬프트 입력 직렬화 실패", e);
+        }
+    }
+
     private static String kst(Instant instant) {
         return instant == null ? null : KST_TIME.format(instant.atZone(KST)) + " (KST)";
     }
@@ -226,10 +304,10 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
         return new LlmCallException(LlmFailureReason.LLM_UNAVAILABLE, message, model, inputTokens, outputTokens, cause);
     }
 
-    private static String loadPrompt() {
+    private static String loadPrompt(String version) {
         try {
             return StreamUtils.copyToString(
-                    new ClassPathResource("prompts/" + PROMPT_VERSION + ".txt").getInputStream(), StandardCharsets.UTF_8);
+                    new ClassPathResource("prompts/" + version + ".txt").getInputStream(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

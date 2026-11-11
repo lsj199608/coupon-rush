@@ -9,7 +9,9 @@ import com.couponrush.llm.contract.LlmTopics;
 import com.couponrush.llmservice.LlmServiceProperties;
 import com.couponrush.llmservice.client.LlmCallException;
 import com.couponrush.llmservice.client.LlmClient;
+import com.couponrush.llmservice.client.KstDates;
 import com.couponrush.llmservice.client.LlmCompletion;
+import com.couponrush.llmservice.client.LlmSearchCompletion;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -106,22 +108,15 @@ public class LlmRequestProcessor {
      * (단 이미 소진된 뒤의 새 요청은 coupon-api LlmBudgetGuard 가 접수 단계에서 먼저 막는다 — 여기 오는 것은 접수 후 소진된 경우)
      */
     private Processed cachedOrBudgetedOrGenerated(LlmRequestMessage request, Instant now) {
-        if (request.type() != LlmRequestType.EVENT_COPY) {
-            // 계약에는 있지만 이 서비스가 아직 처리하지 못하는 기능 (EVENT_SEARCH 는 7단계 A2 에서 구현).
-            // 캐시 키·예산 계산 전에 FAILED 로 끝낸다 — 예외를 올리면 Kafka 재시도·DLT 로 가고, 기다리는 사람은 마감까지 대기한다
-            log.warn("아직 지원하지 않는 요청 종류 — LLM 호출 안 함: requestId={}, type={}", request.requestId(), request.type());
-            return new Processed(Outcome.GENERATED, Optional.of(LlmResultMessage.failed(request.requestId(),
-                    LlmFailureReason.LLM_UNAVAILABLE, null, 0, 0, elapsedMillis(now), clock.instant())));
-        }
-        String cacheKey = ResponseCache.key(client.cacheIdentity(), request.eventCopy());
+        String cacheKey = cacheKey(request);
 
         if (!request.regenerate()) {
-            Optional<ResponseCache.Entry> cached = cache.find(cacheKey);
+            Optional<LlmResultMessage> cached = cache.find(cacheKey)
+                    .flatMap(entry -> fromCache(request, entry, now));
             if (cached.isPresent()) {
                 usage.recordCacheHit(now);
-                log.info("응답 캐시 사용 — LLM 호출 안 함: requestId={}", request.requestId());
-                return new Processed(Outcome.CACHED, Optional.of(LlmResultMessage.completed(request.requestId(),
-                        cached.get().candidates(), cached.get().model(), 0, 0, true, elapsedMillis(now), clock.instant())));
+                log.info("응답 캐시 사용 — LLM 호출 안 함: requestId={}, type={}", request.requestId(), request.type());
+                return new Processed(Outcome.CACHED, cached);
             }
         }
 
@@ -138,19 +133,53 @@ public class LlmRequestProcessor {
             usage.recordCall(now, result.inputTokens(), result.outputTokens());
         }
         if (result.status() == LlmResultStatus.COMPLETED) {
-            cache.save(cacheKey, new ResponseCache.Entry(result.candidates(), result.model()));
+            cache.save(cacheKey, new ResponseCache.Entry(result.candidates(), result.searchFilter(), result.model()));
         }
         return new Processed(Outcome.GENERATED, Optional.of(result));
     }
 
+    /**
+     * 기능마다 "같은 출력을 낼 조건"이 다르다. 검색은 "이번 주" 같은 상대 날짜가 있어서 <b>기준 날짜</b>까지 키에 넣는다
+     * (어제 캐시한 "이번 주" 조건을 오늘 다른 주에 쓰면 틀린다). 기준 날짜는 처리 시각이 아니라 접수 시각(requestedAt)의 한국 날짜.
+     */
+    private String cacheKey(LlmRequestMessage request) {
+        return switch (request.type()) {
+            case EVENT_COPY -> ResponseCache.key(client.cacheIdentity(LlmRequestType.EVENT_COPY), request.eventCopy());
+            case EVENT_SEARCH -> ResponseCache.key(client.cacheIdentity(LlmRequestType.EVENT_SEARCH), request.eventSearch(),
+                    KstDates.dateOf(request.requestedAt()));
+        };
+    }
+
+    /** 캐시 값 → 결과 메시지. 형식이 맞지 않는 값(예전 형식·손상)은 캐시가 없는 것으로 본다 — 실패로 끝내지 않고 새로 생성 */
+    private Optional<LlmResultMessage> fromCache(LlmRequestMessage request, ResponseCache.Entry entry, Instant now) {
+        try {
+            return Optional.of(switch (request.type()) {
+                case EVENT_COPY -> LlmResultMessage.completed(request.requestId(), entry.candidates(), entry.model(),
+                        0, 0, true, elapsedMillis(now), clock.instant());
+                case EVENT_SEARCH -> LlmResultMessage.searchCompleted(request.requestId(), entry.searchFilter(), entry.model(),
+                        0, 0, true, elapsedMillis(now), clock.instant());
+            });
+        } catch (RuntimeException e) {
+            log.warn("캐시 값을 쓸 수 없음 — 새로 생성: requestId={}, type={}, reason={}",
+                    request.requestId(), request.type(), e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     private LlmResultMessage generate(LlmRequestMessage request, Instant startedAt) {
         try {
-            LlmCompletion completion = switch (request.type()) {
-                case EVENT_COPY -> client.generateEventCopy(request.eventCopy());
-                case EVENT_SEARCH -> throw new IllegalStateException("EVENT_SEARCH 는 위에서 이미 걸러진다");
+            return switch (request.type()) {
+                case EVENT_COPY -> {
+                    LlmCompletion c = client.generateEventCopy(request.eventCopy());
+                    yield LlmResultMessage.completed(request.requestId(), c.candidates(), c.model(),
+                            c.inputTokens(), c.outputTokens(), false, elapsedMillis(startedAt), clock.instant());
+                }
+                case EVENT_SEARCH -> {
+                    LlmSearchCompletion c = client.extractSearchFilter(request.eventSearch(), KstDates.dateOf(request.requestedAt()));
+                    yield LlmResultMessage.searchCompleted(request.requestId(), c.filter(), c.model(),
+                            c.inputTokens(), c.outputTokens(), false, elapsedMillis(startedAt), clock.instant());
+                }
             };
-            return LlmResultMessage.completed(request.requestId(), completion.candidates(), completion.model(),
-                    completion.inputTokens(), completion.outputTokens(), false, elapsedMillis(startedAt), clock.instant());
         } catch (LlmCallException e) {
             log.warn("LLM 호출 실패: requestId={}, reason={}, message={}", request.requestId(), e.getReason(), e.getMessage());
             return LlmResultMessage.failed(request.requestId(), e.getReason(), e.getModel(),

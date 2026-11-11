@@ -113,8 +113,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
     - [ ] 0) 사전: manual-check H로 실제 Claude 호출 1회 확인 — API 키가 없어 **C2(tool use) 전까지 미룸**
     - [x] A1) 계약: LlmRequestType.EVENT_SEARCH, EventSearchInput(query ≤ 200), 결과 searchFilter = EventSearchFilter
           (keywords ≤ 5개·각 50자, statuses, start/end 범위 [from, to), availableOnly), EventSearchStatus(= CouponStatus 이름, CouponTest 검사),
-          V7 ck_llm_requests_type에 EVENT_SEARCH. llm-service는 A2 전까지 EVENT_SEARCH를 바로 FAILED(LLM_UNAVAILABLE) — 아래 "LLM 메시지 계약" 메모
-    - [ ] A2) llm-service: 구조화된 출력으로 필터 추출 (문구 생성 패턴 재사용) + fake
+          V7 ck_llm_requests_type에 EVENT_SEARCH — 아래 "LLM 메시지 계약" 메모. 수동 확인 2026-11-11(Kafka 직접 발행 → FAILED 응답, 문구 생성 회귀 OK)
+    - [x] A2) llm-service: LlmClient.extractSearchFilter(input, 오늘 KST 날짜), fake 규칙(FakeEventSearch),
+          Anthropic event-search.v1 프롬프트 + EventSearchOutput(날짜 문자열 양끝 포함) + 검증기, 캐시 키에 기준 날짜 — 아래 "자연어 검색 (llm-service)" 메모
     - [ ] A3) coupon-api: 필터 → SQL 검색, LLM 실패·타임아웃·예산 초과 시 키워드 검색 fallback
     - [ ] A4) 프론트: 이벤트 목록 검색창
     - [ ] B1) mcp-server 모듈 (별도 서비스, 공식 MCP Java SDK, Streamable HTTP) — 조회 전용 도구
@@ -612,6 +613,23 @@ llm-service 처리 순서(LlmRequestProcessor): llm:done → 마감 → llm:infl
   키 규칙은 계약 모듈 LlmUsageKeys(두 서비스 공유). 예산 값은 두 서비스가 같은 LLM_DAILY_TOKEN_BUDGET을 읽는다.
 - 테스트: CostControlFlowTest(실제 Kafka·Redis, fake) — 캐시 적중·공백 차이·다시 생성·실패 미캐시, 토큰 기록·실패 토큰·예산 초과·49,999에서 호출·소진 후 캐시 제공.
   ResponseCacheKeyTest(키 규칙), LlmUsageKeysTest(한국 날짜 경계), coupon-api LlmRequestApiTest(429 LLM_BUDGET_EXCEEDED).
+
+### 자연어 검색 (7단계 A2, llm-service) — client/FakeEventSearch, client/anthropic/EventSearch*, prompts/event-search.v1.txt
+- 처리기는 type별로 캐시 키·LLM 호출·결과(completed / searchCompleted)만 고른다. 마감·멱등·예산·캐시·실패 처리 흐름은 문구 생성과 같다.
+- **기준 날짜 = 접수 시각(requestedAt)의 한국 날짜**(처리 시각 아님, KstDates). 모델에게도 날짜·요일만 주고 시각은 주지 않는다.
+  범위는 날짜 경계(0시)로만 — 같은 날 같은 질문이면 같은 조건 → 캐시 가능. "지금 진행 중"은 시각 범위가 아니라 OPEN 상태로.
+- 캐시 키 = sha256(cacheIdentity(EVENT_SEARCH) + 정규화 질문 + 기준 날짜). 날짜가 바뀌면 "이번 주"의 뜻이 달라져 다른 키.
+  LlmClient.cacheIdentity(type): 문구는 기존 값 그대로(fake:v1, …event-copy.v1…)라 기존 캐시 유지, 검색은 fake:search.v1 / …event-search.v1….
+  ResponseCache.Entry(candidates, searchFilter, model) — 예전 캐시 값은 searchFilter=null로 읽힘. 쓸 수 없는 캐시 값은 실패가 아니라 캐시 없음으로 처리.
+- Anthropic: 출력 형식 EventSearchOutput은 계약과 일부러 다르다 — 기간은 **한국 날짜 문자열 YYYY-MM-DD, 양끝 포함**(모델에게 "이번 주 = 월~일"이
+  자연스럽고 시간대 계산을 맡기지 않음), "조건 없음"은 null 대신 빈 문자열·빈 목록(스키마 필드가 모두 필수). EventSearchOutputValidator가
+  [from 0시, to+1일 0시) KST로 바꾸고, 단어 공백·빈 값·중복은 고쳐 받고, 단어 수/길이 초과·날짜 형식 오류·뒤집힌 범위는 거절(→ 1회 재생성 → INVALID_OUTPUT).
+  재시도·서킷·거절·재생성 루프는 AnthropicLlmClient.generate 하나를 두 기능이 공유 (프롬프트·출력 형식·검증기만 다름).
+- fake 규칙: "진행 중" → OPEN, "오픈 예정"·"시작 전" → UPCOMING, "종료된"·"끝난" → ENDED("끝나는"은 기간), "남은"·"재고" → availableOnly,
+  오늘/내일/이번 주/다음 주/이번 달 → "시작·오픈·열리는"이 있으면 시작 범위, 아니면 종료 범위. 나머지 단어 → keywords(조사·일반어 제거, 5개·50자).
+  한 주는 월요일 시작. 실제 모델 품질이 아니라 흐름 확인용.
+- 테스트: FakeEventSearchTest, EventSearchOutputValidatorTest, AnthropicLlmClientTest(검색 요청 모양·성공·재생성 후 INVALID_OUTPUT·캐시 식별자),
+  ResponseCacheKeyTest(날짜별 키), LlmRequestFlowTest(검색 → COMPLETED + 조건), CostControlFlowTest(검색 캐시, 문구 캐시와 안 섞임).
 
 ### LLM 다음 기능 계획 (7단계 이후 기능, 2026-11-09 수립 — 미구현)
 ```

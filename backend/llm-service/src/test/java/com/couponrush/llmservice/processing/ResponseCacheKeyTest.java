@@ -2,9 +2,11 @@ package com.couponrush.llmservice.processing;
 
 import com.couponrush.llm.contract.EventCopyInput;
 import com.couponrush.llm.contract.EventCopyTone;
+import com.couponrush.llm.contract.EventSearchInput;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -41,6 +43,21 @@ class ResponseCacheKeyTest {
         assertThat(ResponseCache.key("anthropic:claude-sonnet-5-5:event-copy.v2:effort=low", same))
                 .isNotEqualTo(ResponseCache.key(CLIENT, same));
         assertThat(ResponseCache.key("fake:v1", same)).isNotEqualTo(ResponseCache.key(CLIENT, same));
+    }
+
+    @Test
+    void 검색은_같은_날_같은_질문이면_같은_키이고_날짜가_바뀌면_다른_키() {
+        String search = "anthropic:claude-sonnet-5-5:event-search.v1:effort=low";
+        LocalDate today = LocalDate.of(2030, 1, 2);
+        String base = ResponseCache.key(search, new EventSearchInput("이번 주 끝나는  커피"), today);
+
+        assertThat(ResponseCache.key(search, new EventSearchInput(" 이번 주 끝나는 커피 "), today)).isEqualTo(base);
+        assertThat(ResponseCache.key(search, new EventSearchInput("이번 주 끝나는 커피"), today.plusDays(1)))
+                .as("'이번 주'의 뜻이 날짜마다 다르다").isNotEqualTo(base);
+        assertThat(ResponseCache.key(search, new EventSearchInput("이번 주 끝나는 라떼"), today)).isNotEqualTo(base);
+        assertThat(ResponseCache.key("anthropic:claude-sonnet-5-5:event-search.v2:effort=low",
+                new EventSearchInput("이번 주 끝나는 커피"), today)).as("프롬프트 버전").isNotEqualTo(base);
+        assertThat(base).startsWith("llm:cache:").doesNotContain("커피");
     }
 
     @Test

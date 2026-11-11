@@ -2,6 +2,7 @@ package com.couponrush.llmservice.processing;
 
 import com.couponrush.llm.contract.EventCopyInput;
 import com.couponrush.llm.contract.EventCopyTone;
+import com.couponrush.llm.contract.EventSearchInput;
 import com.couponrush.llm.contract.LlmFailureReason;
 import com.couponrush.llm.contract.LlmRequestMessage;
 import com.couponrush.llm.contract.LlmResultMessage;
@@ -109,6 +110,24 @@ class CostControlFlowTest {
         verify(llmClient, times(1)).generateEventCopy(any());
         assertThat(usageField(LlmUsageKeys.CACHE_HITS)).isEqualTo(1);
         assertThat(usageField(LlmUsageKeys.CALLS)).isEqualTo(1);
+    }
+
+    @Test
+    void 검색도_같은_날_같은_질문이면_캐시로_답하고_문구_캐시와_섞이지_않는다() throws Exception {
+        Instant now = Instant.now();
+        LlmResultMessage first = process(LlmRequestMessage.eventSearch(UUID.randomUUID(), 7L, now, now.plusSeconds(60),
+                new EventSearchInput("커피 쿠폰")));
+        LlmResultMessage second = process(LlmRequestMessage.eventSearch(UUID.randomUUID(), 7L, now, now.plusSeconds(60),
+                new EventSearchInput("  커피   쿠폰 ")));
+        LlmResultMessage copy = process(request("커피 쿠폰", false));   // 같은 글자의 문구 생성 요청
+
+        assertThat(first.cached()).isFalse();
+        assertThat(second.cached()).isTrue();
+        assertThat(second.searchFilter()).isEqualTo(first.searchFilter());
+        assertThat(second.totalTokens()).isZero();
+        verify(llmClient, times(1)).extractSearchFilter(any(), any());
+        assertThat(copy.cached()).as("검색 캐시를 문구 결과로 쓰지 않는다").isFalse();
+        assertThat(copy.candidates()).hasSize(3);
     }
 
     @Test
