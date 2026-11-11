@@ -77,6 +77,18 @@ cd backend
 기본은 **fake 제공자**(API 키·비용 없음, 입력으로 정해진 문구 3개)입니다. 실제 Claude를 쓰려면 `infra/.env`에
 `LLM_PROVIDER=anthropic`과 `LLM_API_KEY=...`를 넣고 다시 띄웁니다 (호출마다 비용이 듭니다).
 
+**fake와 실제(anthropic)의 차이** — fake는 LLM을 부르지 않고 **미리 만들어 둔 코드 규칙**으로 결과를 만듭니다.
+요청 → Kafka → 캐시·예산 → 결과 발행까지의 흐름은 똑같이 실제로 동작하고, "결과를 누가 만드느냐"만 다릅니다.
+그래서 fake 결과는 품질 확인용이 아니라 **흐름 확인용**입니다. fake가 아니면(anthropic + 키) Claude가 정상적으로 문장을 이해해 결과를 만듭니다.
+
+| 기능 | fake (기본) — 결과를 만드는 코드 | anthropic — Claude 에게 주는 것 / 결과를 검사하는 코드 |
+|---|---|---|
+| 이벤트 문구 생성 | `FakeLlmClient.generateEventCopy` — 톤별 고정 문장에 키워드·수량·기간을 끼워 넣음 | `prompts/event-copy.v1.txt` + `EventCopyOutput` / `EventCopyOutputValidator` |
+| 자연어 검색 | `FakeEventSearch` — 정해진 표현만 인식("진행 중", "남은", "이번 주 끝나는" 등), 나머지 단어 → keywords. 처음 보는 표현은 이해하지 못함 | `prompts/event-search.v1.txt` + `EventSearchOutput` / `EventSearchOutputValidator` |
+
+(파일 위치: `backend/llm-service/src/main/java/com/couponrush/llmservice/client/`, 프롬프트는 `.../src/main/resources/prompts/`)
+어느 제공자든 결과는 같은 계약 형식으로 나가므로 coupon-api는 차이를 모릅니다. 기동 로그의 `LLM 제공자: fake` / `anthropic`으로 어느 쪽인지 확인할 수 있습니다.
+
 두 가지 방법 중 **하나만** 씁니다 (둘 다 켜면 같은 컨슈머 그룹을 나눠 가져서 로그를 따라가기 어렵습니다).
 
 **A. 컨테이너로 (compose `llm` 프로필)** — 코드를 고치지 않을 때

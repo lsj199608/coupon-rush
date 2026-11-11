@@ -7,8 +7,17 @@ import com.couponrush.llm.contract.LlmRequestType;
 import java.time.LocalDate;
 
 /**
- * LLM 제공자 추상화. 구현: {@link FakeLlmClient}(기본·모든 테스트), Anthropic(키가 있을 때).
- * 처리 흐름(멱등·마감·캐시·예산·결과 발행)은 구현과 무관하게 LlmRequestProcessor 가 맡는다.
+ * LLM 제공자 추상화. 처리 흐름(멱등·마감·캐시·예산·결과 발행)은 구현과 무관하게 LlmRequestProcessor 가 맡고,
+ * 구현은 "결과를 누가 만드느냐"만 다르다 (선택은 LlmClientConfig: LLM_PROVIDER, 기본 fake).
+ * <ul>
+ *   <li><b>fake</b> ({@link FakeLlmClient}, 기본·모든 자동 테스트) — LLM 을 부르지 않고 <b>미리 만들어 둔 코드 규칙</b>으로 결과를 만든다.
+ *       문구 생성 = {@link FakeLlmClient#generateEventCopy} 의 톤별 고정 문장, 자연어 검색 = {@link FakeEventSearch} 의 표현 목록·조사/일반어 제거.
+ *       비용 0, 항상 같은 결과. 정해진 표현만 알아들으므로 품질이 아니라 흐름 확인용이다.</li>
+ *   <li><b>anthropic</b> (client.anthropic.AnthropicLlmClient, LLM_PROVIDER=anthropic + LLM_API_KEY) — Claude 가 문장을 이해해 결과를 만드는
+ *       정상 동작. 프롬프트(resources/prompts/*.txt)와 출력 형식(EventCopyOutput, EventSearchOutput)을 주고,
+ *       답은 검증기(EventCopyOutputValidator, EventSearchOutputValidator)가 검사한 것만 쓴다.</li>
+ * </ul>
+ * 어느 구현이든 같은 계약 형식(후보 / EventSearchFilter)을 돌려주므로 coupon-api 는 차이를 모른다.
  */
 public interface LlmClient {
 

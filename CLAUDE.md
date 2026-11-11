@@ -561,8 +561,13 @@ llm-requests ─▶ LlmRequestConsumer (그룹 llm-service, concurrency 2 = 동�
 - 결과를 Redis(llm:done)에 저장한 **다음에** 발행 — 발행 실패 후 재처리가 LLM 재호출이 되지 않게. Kafka 오프셋만으로는 at-least-once라 부족.
 - max.poll.interval.ms 5분: LLM 호출이 길어 poll이 늦어지면 리밸런스 → 같은 메시지 중복 처리·중복 비용.
 - DB 없음, 사용자 JWT 없음, 공개 API 없음. 로컬 bootRun은 infra/.env 전체를 읽지만 쓰는 값은 Kafka·Redis(·4단계부터 LLM_*)뿐.
-- LlmClient: FakeLlmClient(@Component, 지금 유일한 구현) — 입력 → 톤별 고정 문구 3개(계약 길이로 자름), 토큰은 글자 수로 흉내.
-  app.llm.fake.delay로 응답 지연(로컬 화면 확인용). 4단계에서 Anthropic 구현 + 키 없으면 fake 자동 선택.
+- LlmClient 구현 2개 — **fake = 미리 만든 코드 규칙, anthropic = Claude(정상 동작)**. 흐름은 같고 "결과를 누가 만드느냐"만 다르다.
+  | 기능 | fake (기본, LLM 호출 없음) | anthropic (LLM_PROVIDER=anthropic + LLM_API_KEY) |
+  |---|---|---|
+  | 문구 생성 | FakeLlmClient.generateEventCopy — 톤별 고정 문장 3개(계약 길이로 자름) | event-copy.v1.txt + EventCopyOutput → EventCopyOutputValidator |
+  | 자연어 검색 | FakeEventSearch — 정해진 표현만 인식, 나머지 단어 → keywords | event-search.v1.txt + EventSearchOutput → EventSearchOutputValidator |
+  fake 토큰은 글자 수로 흉내(예산 로직 검증용), app.llm.fake.delay로 응답 지연(로컬 화면 확인용). fake 결과는 품질이 아니라 흐름 확인용 —
+  사용자에게 설명할 때 이 구분을 분명히 한다. 같은 설명이 README "2-1. LLM 서비스"와 LlmClient 주석에도 있다 (바꾸면 셋 다).
 - 테스트(LlmRequestFlowTest): Kafka·Redis 컨테이너만. coupon-api 대신 llm-requests 발행, llm-results 직접 읽기.
   @MockitoSpyBean FakeLlmClient로 호출 횟수 검증 (재전달 1회, 만료·모르는 버전·처리 중·DLT는 0회).
   "처리하지 않음" 검증은 같은 키(=같은 파티션)로 표시용 요청을 뒤에 보내 그 결과가 오면 앞의 것도 처리된 것으로 본다 (sleep 없이).
