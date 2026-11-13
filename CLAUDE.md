@@ -123,7 +123,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           분당 한도 초과 → 즉시 FALLBACK/RATE_LIMITED, 목록·AI 문구 추천 회귀 OK).
           한도 확인은 결과를 기다리지 않고 POST만 연속으로 (fake 꺼진 상태에서 폴링까지 하면 1회 15초라 분 한도에 안 걸림)
     - [x] A4) 프론트: 이벤트 목록 검색창(?q=) → AI 조건 칩 / 키워드 검색 안내 + 결과 카드 — 아래 "프론트엔드"의 "자연어 검색" 메모.
-          브라우저 수동 확인은 아직
+          브라우저 수동 확인 2026-11-13 통과 (AI 조건 칩·URL ?q=·뒤로 가기 재사용·llm-service 중단 시 키워드 검색 안내·전체 보기·모바일 폭)
     - [ ] B1) mcp-server 모듈 (별도 서비스, 공식 MCP Java SDK, Streamable HTTP) — 조회 전용 도구
           search_events / get_event / get_my_coupons, coupon-api 기존 조회 API를 호출하는 어댑터
     - [ ] B2) 인증: 서비스 토큰 + 사용자 ID는 서버가 주입 (모델이 userId를 인자로 고르지 못하게)
