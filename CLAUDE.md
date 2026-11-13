@@ -115,7 +115,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           (keywords ≤ 5개·각 50자, statuses, start/end 범위 [from, to), availableOnly), EventSearchStatus(= CouponStatus 이름, CouponTest 검사),
           V7 ck_llm_requests_type에 EVENT_SEARCH — 아래 "LLM 메시지 계약" 메모. 수동 확인 2026-11-11(Kafka 직접 발행 → FAILED 응답, 문구 생성 회귀 OK)
     - [x] A2) llm-service: LlmClient.extractSearchFilter(input, 오늘 KST 날짜), fake 규칙(FakeEventSearch),
-          Anthropic event-search.v1 프롬프트 + EventSearchOutput(날짜 문자열 양끝 포함) + 검증기, 캐시 키에 기준 날짜 — 아래 "자연어 검색 (llm-service)" 메모
+          Anthropic event-search.v1 프롬프트 + EventSearchOutput(날짜 문자열 양끝 포함) + 검증기, 캐시 키에 기준 날짜 — 아래 "자연어 검색 (llm-service)" 메모.
+          수동 확인 2026-11-13(Kafka 직접 발행: 이번 주·내일·상태·남은 수량·빈 조건, 같은 질문 cached, Redis 사용량, AI 문구 추천 회귀 OK)
     - [ ] A3) coupon-api: 필터 → SQL 검색, LLM 실패·타임아웃·예산 초과 시 키워드 검색 fallback
     - [ ] A4) 프론트: 이벤트 목록 검색창
     - [ ] B1) mcp-server 모듈 (별도 서비스, 공식 MCP Java SDK, Streamable HTTP) — 조회 전용 도구
