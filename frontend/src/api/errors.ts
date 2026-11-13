@@ -28,6 +28,16 @@ const MESSAGES: Record<string, string> = {
   LLM_BUDGET_EXCEEDED: '오늘 문구 생성 예산을 모두 썼어요. 내일 다시 시도하거나 직접 입력해 주세요.',
   LLM_REQUEST_UNAVAILABLE: '문구 생성 요청을 접수하지 못했어요. 잠시 후 다시 시도해 주세요.',
   LLM_REQUEST_NOT_FOUND: '문구 생성 결과를 찾을 수 없어요. 다시 생성해 주세요.',
+  // 자연어 검색 (한도·예산·장애는 에러가 아니라 키워드 검색 결과로 온다 — SEARCH_FALLBACK_MESSAGES)
+  EVENT_SEARCH_NOT_FOUND: '검색 결과를 찾을 수 없어요. 다시 검색해 주세요.',
+};
+
+/** 키워드 검색으로 대신한 이유(FALLBACK.fallbackReason, 백엔드 SearchFallbackReason) → 안내 */
+const SEARCH_FALLBACK_MESSAGES: Record<string, string> = {
+  RATE_LIMITED: 'AI 검색을 너무 자주 써서 이번엔 단어로 찾았어요. 잠시 후 다시 써 보세요.',
+  BUDGET_EXCEEDED: '오늘 AI 검색 사용량을 모두 써서 단어로 찾았어요.',
+  TIMEOUT: 'AI 검색이 오래 걸려 단어로 찾았어요.',
+  LLM_UNAVAILABLE: 'AI 검색이 잠시 원활하지 않아 단어로 찾았어요.',
 };
 
 /** 문구 생성 실패 사유(FAILED.failureReason, 백엔드 LlmFailureReason) → 메시지 */
@@ -87,6 +97,10 @@ export function failureReasonMessage(reason: string | undefined): string {
 
 export function llmFailureMessage(reason: string | null | undefined): string {
   return (reason && LLM_FAILURE_MESSAGES[reason]) || GENERIC;
+}
+
+export function searchFallbackMessage(reason: string | null | undefined): string {
+  return (reason && SEARCH_FALLBACK_MESSAGES[reason]) || 'AI 검색을 쓸 수 없어 단어로 찾았어요.';
 }
 
 export function isFinalRejection(code: string | undefined): boolean {

@@ -122,7 +122,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           수동 확인 2026-11-13(bootRun 2개 + curl: AI 조건 COMPLETED(상태·예정·남은 수량·빈 조건), llm-service 중단 → 15초 후 FALLBACK/TIMEOUT,
           분당 한도 초과 → 즉시 FALLBACK/RATE_LIMITED, 목록·AI 문구 추천 회귀 OK).
           한도 확인은 결과를 기다리지 않고 POST만 연속으로 (fake 꺼진 상태에서 폴링까지 하면 1회 15초라 분 한도에 안 걸림)
-    - [ ] A4) 프론트: 이벤트 목록 검색창
+    - [x] A4) 프론트: 이벤트 목록 검색창(?q=) → AI 조건 칩 / 키워드 검색 안내 + 결과 카드 — 아래 "프론트엔드"의 "자연어 검색" 메모.
+          브라우저 수동 확인은 아직
     - [ ] B1) mcp-server 모듈 (별도 서비스, 공식 MCP Java SDK, Streamable HTTP) — 조회 전용 도구
           search_events / get_event / get_my_coupons, coupon-api 기존 조회 API를 호출하는 어댑터
     - [ ] B2) 인증: 서비스 토큰 + 사용자 ID는 서버가 주입 (모델이 userId를 인자로 고르지 못하게)
@@ -379,8 +380,8 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 
 | 폴더 | 내용 |
 |---|---|
-| api/ | axios 호출·응답 타입(coupons, admin, auth, llm), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
-| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents, useEventCopy(문구 생성 상태 머신) |
+| api/ | axios 호출·응답 타입(coupons, admin, auth, llm, search), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
+| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents, useEventCopy(문구 생성 상태 머신), useEventSearch(자연어 검색) |
 | components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary, EventCopyPanel(AI 문구 추천) |
 | pages/ | EventList, EventDetail, MyCoupons, AdminEventCreate, Login, OAuthCallback, NotFound |
 | auth/ | AuthContext(세션 상태), ProtectedRoute(로그인 필요), AdminRoute(ADMIN 필요) |
@@ -394,7 +395,7 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 
 | 경로 (src/routes.ts) | 화면 | 접근 | API |
 |---|---|---|---|
-| `/` | 이벤트 목록 (상태 뱃지 오픈 전/진행 중/종료, 남은 수량) | 공개 | GET /api/coupons |
+| `/` (`?q=` 검색) | 이벤트 목록 (상태 뱃지 오픈 전/진행 중/종료, 남은 수량) + 자연어 검색창 | 공개 | GET /api/coupons, POST /api/coupons/search, GET /api/coupons/search/{id} |
 | `/events/:id` | 상세: 기간·남은 수량·카운트다운·[발급 받기] | 공개 (발급만 로그인) | GET /api/coupons/{id} (3초마다), POST .../issue, GET /api/issue-requests/{id} |
 | `/me/coupons` | 내 쿠폰 | 로그인 | GET /api/users/me/coupons |
 | `/admin/events/new` | 이벤트 생성 폼(설명 포함) + AI 문구 추천 + Redis 재고 적재 확인 | ADMIN | POST /api/admin/coupons, GET .../reconciliation, POST /api/admin/llm/event-copy, GET /api/admin/llm/requests/{id} |
@@ -458,6 +459,23 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
   EVENT_COPY_POLLING(2s/75s)은 화면 테스트에서 짧게 바꾸고, useEventCopy.test.tsx는 가짜 시계로 실제 값 검증.
 - 메시지는 api/errors.ts의 LLM_* 코드와 llmFailureMessage(LLM_UNAVAILABLE·BUDGET_EXCEEDED·INVALID_OUTPUT·CONTENT_REFUSED·TIMEOUT·PUBLISH_FAILED).
 - 설명: 폼 textarea(maxLength 500, 검증 500자), 비우면 null로 보냄. 상세·생성 완료 화면에 표시(white-space: pre-line).
+
+#### 자연어 검색 (7단계 A4, pages/EventListPage + hooks/useEventSearch + api/search)
+```
+검색창 [검색] → URL ?q=질문 (공백 정리, 비우면 q 제거 = 전체 목록)
+  useQuery ['event-search', q]: POST /api/coupons/search (재시도 없음, 5분 재사용 — 상세 → 뒤로 와도 다시 접수 안 함)
+   ├ FALLBACK → 키워드 검색 결과 + 이유 안내(searchFallbackMessage) + 단어 칩
+   └ PENDING  → useQuery ['event-search','request',id] 1초 폴링 → COMPLETED(AI 조건 칩 + 결과) / FALLBACK
+                 화면 대기 25초(서버 마감 15초 + 여유) 넘게 PENDING → "다시 검색" / 접수·조회 실패 → 에러 + [다시 검색]
+```
+- **대체 검색은 서버가 한다** — 화면은 status(PENDING/COMPLETED/FALLBACK)만 보고 그린다. FALLBACK도 정상 결과(경고 색 안내만).
+- 검색어를 URL에: 뒤로 가기·공유·새로고침에 같은 검색. 입력칸은 URL이 바뀌면 따라간다.
+- 접수(POST)를 mutation이 아니라 useQuery로: 데이터를 바꾸지 않는 조회이고, 질문별 캐시로 같은 질문 재접수(한도·비용)를 막는다.
+- 조건 칩(utils/searchFilter.describeFilter): 단어 "커피", 상태(StatusBadge의 STATUS_LABELS, 여러 개면 "또는"), 기간은 [from, to)를
+  양끝 포함 날짜로(to - 1ms → "이번 주에 끝나는" = "11월 9일 ~ 11월 15일"), 남은 수량. 빈 조건이면 "조건 없이 전체".
+- 결과 카드는 목록과 같은 EventList. 모바일은 입력칸 한 줄 + 버튼 아래 줄.
+- 테스트: pages/EventSearch.test.tsx(조건 표시·폴링·접수 FALLBACK·폴링 TIMEOUT·결과 없음/전체 보기·빈 조건·에러 재시도·화면 타임아웃·빈 검색),
+  utils/searchFilter.test.ts(날짜는 PC 시간대 0시로 만들어 시간대와 무관).
 
 #### 발급 폴링 구조 (hooks/useIssueCoupon)
 ```
