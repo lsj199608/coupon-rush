@@ -47,7 +47,9 @@ public enum ErrorCode {
     /** 서비스 전체 일일 토큰 예산 소진 (기본 50,000) — 한국 자정에 초기화 */
     LLM_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 문구 생성 예산을 모두 사용했습니다. 내일 다시 시도해 주세요."),
     /** llm-requests 발행이 확정되지 않음 (요청은 FAILED(PUBLISH_FAILED) 로 남는다) */
-    LLM_REQUEST_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "문구 생성 요청을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    LLM_REQUEST_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "문구 생성 요청을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요."),
+    // 자연어 검색 (7단계 A3). 한도·예산·LLM 실패는 에러가 아니라 키워드 검색으로 대신하므로 코드가 없다
+    EVENT_SEARCH_NOT_FOUND(HttpStatus.NOT_FOUND, "검색 요청을 찾을 수 없습니다.");
 
     private final HttpStatus status;
     private final String message;

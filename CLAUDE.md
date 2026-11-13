@@ -117,7 +117,11 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
     - [x] A2) llm-service: LlmClient.extractSearchFilter(input, 오늘 KST 날짜), fake 규칙(FakeEventSearch),
           Anthropic event-search.v1 프롬프트 + EventSearchOutput(날짜 문자열 양끝 포함) + 검증기, 캐시 키에 기준 날짜 — 아래 "자연어 검색 (llm-service)" 메모.
           수동 확인 2026-11-13(Kafka 직접 발행: 이번 주·내일·상태·남은 수량·빈 조건, 같은 질문 cached, Redis 사용량, AI 문구 추천 회귀 OK)
-    - [ ] A3) coupon-api: 필터 → SQL 검색, LLM 실패·타임아웃·예산 초과 시 키워드 검색 fallback
+    - [x] A3) coupon-api: POST /api/coupons/search(공개, 202 PENDING 또는 200 FALLBACK) + GET /api/coupons/search/{id} 폴링,
+          조건 → Criteria 조회(CouponSpecifications), 한도·예산·발행 실패·LLM 실패·마감 15초 → 키워드 검색 fallback — 아래 "자연어 검색 (coupon-api)" 메모.
+          수동 확인 2026-11-13(bootRun 2개 + curl: AI 조건 COMPLETED(상태·예정·남은 수량·빈 조건), llm-service 중단 → 15초 후 FALLBACK/TIMEOUT,
+          분당 한도 초과 → 즉시 FALLBACK/RATE_LIMITED, 목록·AI 문구 추천 회귀 OK).
+          한도 확인은 결과를 기다리지 않고 POST만 연속으로 (fake 꺼진 상태에서 폴링까지 하면 1회 15초라 분 한도에 안 걸림)
     - [ ] A4) 프론트: 이벤트 목록 검색창
     - [ ] B1) mcp-server 모듈 (별도 서비스, 공식 MCP Java SDK, Streamable HTTP) — 조회 전용 도구
           search_events / get_event / get_my_coupons, coupon-api 기존 조회 API를 호출하는 어댑터
@@ -182,7 +186,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - 콜백 URL: http://localhost:8080/login/oauth2/code/{kakao|naver|google} (각 콘솔에 등록)
 
 ### 인증 (JWT)
-- Security: 기본은 전부 인증 필요. 공개 경로는 /actuator/health, POST /api/auth/refresh, GET /api/coupons, GET /api/coupons/*.
+- Security: 기본은 전부 인증 필요. 공개 경로는 /actuator/health, POST /api/auth/refresh, GET /api/coupons, GET /api/coupons/*,
+  POST /api/coupons/search, GET /api/coupons/search/* (A3).
   /api/admin/**는 ROLE_ADMIN. stateless, CSRF/폼로그인 off (OAuth2 state 보관에만 세션 잠깐 사용).
 - JWT에는 userId(sub), token_type(access|refresh), jti만 담고 access에만 role 추가. 개인정보는 넣지 않는다.
   token_type으로 refresh를 Bearer로 쓰는 것(또는 반대)을 막는다.
@@ -636,6 +641,31 @@ llm-service 처리 순서(LlmRequestProcessor): llm:done → 마감 → llm:infl
   한 주는 월요일 시작. 실제 모델 품질이 아니라 흐름 확인용.
 - 테스트: FakeEventSearchTest, EventSearchOutputValidatorTest, AnthropicLlmClientTest(검색 요청 모양·성공·재생성 후 INVALID_OUTPUT·캐시 식별자),
   ResponseCacheKeyTest(날짜별 키), LlmRequestFlowTest(검색 → COMPLETED + 조건), CostControlFlowTest(검색 캐시, 문구 캐시와 안 섞임).
+
+### 자연어 검색 (7단계 A3, coupon-api) — com.couponrush.search, coupon/search/
+```
+POST /api/coupons/search {query 1~200자} (공개, 로그인하면 회원별 / 아니면 IP별 한도)
+  ① 예산 소진(LlmBudgetGuard) / 검색 한도 초과(분 10·일 100) / 발행 실패 / 그 밖의 예외 → 그 자리에서 키워드 검색 → 200 FALLBACK(사유)
+  ② llm_requests PENDING(type EVENT_SEARCH, requested_by = 회원 ID 또는 0, 마감 15초) → llm-requests → 202 PENDING + Location
+GET /api/coupons/search/{id} → PENDING / COMPLETED(AI 조건 filter + DB 결과) / FALLBACK(TIMEOUT·LLM_UNAVAILABLE·BUDGET_EXCEEDED + 키워드 결과)
+```
+- **검색은 AI 없이도 동작한다** — LLM 쪽 문제는 에러가 아니라 FALLBACK + 사유(SearchFallbackReason)로 응답. 400은 입력 검증뿐.
+- AI는 조건만, 조회는 항상 coupon-api DB: CouponService.search(CouponSearchCondition) — 목록과 같은 정렬(오픈 최신순)·50개·응답 형식.
+  CouponSearchCondition은 coupon 패키지 표현(계약에 의존 안 함), 변환은 EventSearchService.toCondition (상태 이름 = CouponStatus).
+- CouponSpecifications(Criteria): 단어는 이름·설명 부분 일치(lower, LIKE 이스케이프 — "50%"가 와일드카드가 되지 않게), AI 조건은 ALL·키워드 검색은 ANY,
+  상태는 조회 시각 기준(CouponStatus.of와 같은 [start, end)), 기간 [from, to). availableOnly는 SQL(DB 카운터 < 총 수량)로 1차,
+  Redis 재고로 2차 (DB 카운터는 늦게 따라오므로 "DB로 소진"만 확실 — 남은 수량 표시와 같은 기준).
+- 키워드 검색(KeywordQuery): 공백 분리 → 문장부호·끝 조사 하나 제거(2자 이상 남을 때) → 1글자·일반어(쿠폰, 이벤트, 보여줘…) 제외 → 5개·50자. 뜻 해석 없음.
+- 결과 저장: llm_requests.result = 검색 조건 JSON (LlmResultHandler가 searchFilter가 있으면 그것을, 아니면 후보를 저장).
+  관리자 조회 API(/api/admin/llm/requests/{id})는 EVENT_COPY일 때만 후보를 읽는다(검색 행을 후보로 파싱하지 않게).
+- 검색 조회는 소유자를 검사하지 않는다: 결과는 공개 이벤트 목록이고 UUID를 아는 것이 권한. 공개 경로라 만료 토큰이 와도 401 → refresh가 안 일어나서
+  소유자 검사를 하면 본인 요청도 못 볼 수 있다. 문구 생성 요청 ID로 검색 조회하면 404 EVENT_SEARCH_NOT_FOUND.
+- 비로그인 IP = getRemoteAddr. 리버스 프록시 뒤에 배포하면 server.forward-headers-strategy로 신뢰 프록시의 X-Forwarded-For를 쓰게 할 것
+  (로컬은 Vite 프록시라 비로그인 전원이 127.0.0.1 한 한도를 나눠 씀). 한도 키: llm:search-rate:{user:ID|ip:주소}:d|m:… (문구 생성과 별도).
+- 설정 app.llm.search.{request-timeout 15s, per-minute 10, per-day 100} (환경변수 없음). 마감이 짧아 실제 LLM이 늦으면 결과는 버려지고 비용은 나간다 (WARN 로그).
+- 테스트: EventSearchApiTest(접수·PENDING·회원별 한도·400 / COMPLETED·빈 조건·관리자 조회 / LLM 실패·TIMEOUT·예산·한도 fallback / 404),
+  CouponSearchTest(정렬·부분 일치·ALL/ANY·이스케이프·상태·기간 경계·Redis 재고·AND), KeywordQueryTest.
+- 테스트 메모: 고정 날짜로 Redis 적재하는 테스트는 키 만료(종료 + 7일, 절대 시각)가 지나면 깨진다 — RedisCouponStockTest가 2026-11-13에 깨져 현재 시각 기준으로 바꿈.
 
 ### LLM 다음 기능 계획 (7단계 이후 기능, 2026-11-09 수립 — 미구현)
 ```

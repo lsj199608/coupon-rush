@@ -15,7 +15,7 @@ import java.util.UUID;
  * @param schemaVersion {@link LlmTopics#SCHEMA_VERSION}
  * @param requestId     coupon-api 가 만든 UUID — 멱등 처리, 결과 매칭, 상태 조회의 기준
  * @param type          기능 종류. 입력 필드는 type 에 맞는 것 <b>하나만</b> 채운다 (생성자가 검사)
- * @param requestedBy   요청한 회원 ID
+ * @param requestedBy   요청한 회원 ID. 0 = 비로그인 (공개 기능인 자연어 검색 — 회원 ID 는 1부터)
  * @param requestedAt   접수 시각. 검색의 "이번 주" 같은 상대 시각도 이 시각 기준으로 해석한다
  * @param deadline      이 시각이 지나면 coupon-api 는 TIMEOUT 으로 처리한다.
  *                      llm-service 는 지난 요청의 LLM 호출을 건너뛴다 (기다리는 사람이 없는데 비용을 쓰지 않음)

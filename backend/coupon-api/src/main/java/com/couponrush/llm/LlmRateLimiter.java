@@ -44,8 +44,32 @@ public class LlmRateLimiter {
 
     /** 한도 안이면 1회 사용으로 기록하고 반환, 넘었으면 429 BusinessException */
     public void acquire(Long userId, Instant now) {
-        Long result = redisTemplate.execute(SCRIPT, List.of(dayKey(userId, now), minuteKey(userId, now)),
-                String.valueOf(properties.rateLimit().perDay()), String.valueOf(properties.rateLimit().perMinute()),
+        acquire(dayKey(userId, now), minuteKey(userId, now),
+                properties.rateLimit().perDay(), properties.rateLimit().perMinute());
+    }
+
+    /**
+     * 자연어 검색 한도 (문구 생성과 별도 카운터). 검색은 공개라 주체가 회원 ID 또는 비로그인 IP 다.
+     * 넘으면 같은 BusinessException 을 던지지만, 검색 쪽은 이것을 에러로 응답하지 않고 키워드 검색으로 대신한다.
+     *
+     * @param subject "user:{id}" 또는 "ip:{주소}"
+     */
+    public void acquireSearch(String subject, Instant now) {
+        acquire(searchDayKey(subject, now), searchMinuteKey(subject, now),
+                properties.search().perDay(), properties.search().perMinute());
+    }
+
+    public String searchDayKey(String subject, Instant now) {
+        return "llm:search-rate:{" + subject + "}:d:" + DAY.format(zoned(now));
+    }
+
+    public String searchMinuteKey(String subject, Instant now) {
+        return "llm:search-rate:{" + subject + "}:m:" + MINUTE.format(zoned(now));
+    }
+
+    private void acquire(String dayKey, String minuteKey, int perDay, int perMinute) {
+        Long result = redisTemplate.execute(SCRIPT, List.of(dayKey, minuteKey),
+                String.valueOf(perDay), String.valueOf(perMinute),
                 String.valueOf(DAY_KEY_TTL.toSeconds()), String.valueOf(MINUTE_KEY_TTL.toSeconds()));
         if (result == null) {
             throw new IllegalStateException("레이트 리밋 스크립트 결과 없음");

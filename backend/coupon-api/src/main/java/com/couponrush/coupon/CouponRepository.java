@@ -2,6 +2,7 @@ package com.couponrush.coupon;
 
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -11,7 +12,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
-public interface CouponRepository extends JpaRepository<Coupon, Long> {
+/** JpaSpecificationExecutor: 자연어·키워드 검색(CouponSpecifications)의 동적 조건 조회 */
+public interface CouponRepository extends JpaRepository<Coupon, Long>, JpaSpecificationExecutor<Coupon> {
 
     /**
      * [조건부 UPDATE] 재고 확인과 차감을 한 문장으로 원자적으로 처리한다.

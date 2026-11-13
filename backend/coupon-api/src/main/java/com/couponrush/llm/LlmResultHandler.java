@@ -57,9 +57,11 @@ public class LlmResultHandler {
                 });
     }
 
+    /** result 컬럼 내용: 문구 생성 = 후보 목록, 검색 = 검색 조건 (계약상 COMPLETED 는 둘 중 정확히 하나만 있다) */
     private String toJson(LlmResultMessage message) {
         try {
-            return objectMapper.writeValueAsString(message.candidates());
+            return objectMapper.writeValueAsString(
+                    message.searchFilter() != null ? message.searchFilter() : message.candidates());
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("LLM 결과 직렬화 실패: requestId=" + message.requestId(), e);
         }

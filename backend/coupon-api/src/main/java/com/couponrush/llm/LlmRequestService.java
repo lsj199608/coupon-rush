@@ -4,6 +4,8 @@ import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
 import com.couponrush.llm.contract.EventCopyCandidate;
 import com.couponrush.llm.contract.EventCopyInput;
+import com.couponrush.llm.contract.EventSearchFilter;
+import com.couponrush.llm.contract.EventSearchInput;
 import com.couponrush.llm.contract.LlmFailureReason;
 import com.couponrush.llm.contract.LlmRequestMessage;
 import com.couponrush.llm.contract.LlmRequestType;
@@ -43,6 +45,9 @@ import java.util.concurrent.TimeoutException;
 public class LlmRequestService {
 
     private static final Logger log = LoggerFactory.getLogger(LlmRequestService.class);
+
+    /** 비로그인 검색의 requestedBy (회원 ID 는 1부터 — IDENTITY). requested_by 는 FK 없는 감사 기록이라 0 을 넣을 수 있다 */
+    public static final long ANONYMOUS = 0L;
     private static final TypeReference<List<EventCopyCandidate>> CANDIDATES = new TypeReference<>() {
     };
 
@@ -79,6 +84,52 @@ public class LlmRequestService {
         repository.save(LlmRequest.pending(requestId, LlmRequestType.EVENT_COPY, userId, toJson(input), now, deadline));
         publish(message);
         return LlmRequestAcceptedResponse.pending(requestId, deadline);
+    }
+
+    /**
+     * 자연어 검색 요청 (공개). 순서는 문구 생성과 같다: 예산 → 한도 → PENDING 커밋 → 발행.
+     * 거절은 문구 생성과 같은 BusinessException 으로 던진다 — 에러로 응답할지 키워드 검색으로 대신할지는 호출하는 쪽(검색 서비스)이 정한다.
+     *
+     * @param requestedBy 회원 ID, 비로그인이면 {@link #ANONYMOUS}
+     * @param rateSubject 한도를 세는 주체 ("user:{id}" / "ip:{주소}")
+     */
+    public LlmRequestAcceptedResponse requestEventSearch(long requestedBy, String rateSubject, EventSearchInput input) {
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        budgetGuard.checkRemaining(now);
+        rateLimiter.acquireSearch(rateSubject, now);
+
+        UUID requestId = UUID.randomUUID();
+        Instant deadline = now.plus(properties.search().requestTimeout());
+        LlmRequestMessage message = LlmRequestMessage.eventSearch(requestId, requestedBy, now, deadline, input);
+
+        repository.save(LlmRequest.pending(requestId, LlmRequestType.EVENT_SEARCH, requestedBy, toJson(input), now, deadline));
+        publish(message);
+        return LlmRequestAcceptedResponse.pending(requestId, deadline);
+    }
+
+    /**
+     * 검색 요청 조회. 소유자를 확인하지 않는다 — 결과는 공개 이벤트 목록이고, 추측할 수 없는 requestId(UUID)를 아는 것이 곧 권한이다.
+     * (공개 경로라 토큰이 만료된 채로 와도 401 → refresh 가 일어나지 않으므로, 소유자 검사를 하면 본인 요청도 못 보게 된다)
+     * 마감이 지난 PENDING 은 문구 생성과 같이 이 자리에서 TIMEOUT 으로 확정한다.
+     */
+    public LlmRequest getSearch(UUID requestId) {
+        LlmRequest request = repository.findById(requestId)
+                .filter(found -> found.getType() == LlmRequestType.EVENT_SEARCH)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_SEARCH_NOT_FOUND));
+        if (request.isExpiredPending(clock.instant()) && repository.timeoutIfExpired(requestId, clock.instant()) == 1) {
+            return repository.findById(requestId).orElseThrow();
+        }
+        return request;
+    }
+
+    /** COMPLETED 검색 요청의 조건 */
+    public EventSearchFilter searchFilterOf(LlmRequest request) {
+        return readJson(request.getResult(), EventSearchFilter.class, request);
+    }
+
+    /** 검색 요청의 원래 질문 (키워드 검색으로 대신할 때 쓴다) */
+    public String searchQueryOf(LlmRequest request) {
+        return readJson(request.getInput(), EventSearchInput.class, request).query();
     }
 
     /**
@@ -126,14 +177,24 @@ public class LlmRequestService {
         return new BusinessException(ErrorCode.LLM_REQUEST_UNAVAILABLE);
     }
 
+    /** 후보는 문구 생성 요청에만 있다 (검색 요청의 result 는 검색 조건이라 후보로 읽으면 안 된다) */
     private List<EventCopyCandidate> candidatesOf(LlmRequest request) {
-        if (request.getStatus() != LlmRequestStatus.COMPLETED || request.getResult() == null) {
+        if (request.getType() != LlmRequestType.EVENT_COPY
+                || request.getStatus() != LlmRequestStatus.COMPLETED || request.getResult() == null) {
             return List.of();
         }
         try {
             return objectMapper.readValue(request.getResult(), CANDIDATES);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("저장된 LLM 결과를 읽을 수 없습니다: requestId=" + request.getRequestId(), e);
+        }
+    }
+
+    private <T> T readJson(String json, Class<T> type, LlmRequest request) {
+        try {
+            return objectMapper.readValue(json, type);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("저장된 LLM 요청 값을 읽을 수 없습니다: requestId=" + request.getRequestId(), e);
         }
     }
 

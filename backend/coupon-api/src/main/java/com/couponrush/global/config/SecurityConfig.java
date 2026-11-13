@@ -65,6 +65,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
                         // 쿠폰 정보(남은 수량)는 로그인 전에도 이벤트 페이지에서 볼 수 있게 공개
                         .requestMatchers(HttpMethod.GET, "/api/coupons", "/api/coupons/*").permitAll()
+                        // 자연어 검색도 목록처럼 공개 (한도는 회원별 / 비로그인 IP별, LLM 을 못 쓰면 키워드 검색)
+                        .requestMatchers(HttpMethod.POST, "/api/coupons/search").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/coupons/search/*").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2Login(oauth2 -> oauth2

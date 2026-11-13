@@ -10,6 +10,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -24,7 +25,9 @@ class RedisCouponStockTest {
     @Autowired RedisCouponStock stock;
     @Autowired StringRedisTemplate redisTemplate;
 
-    private final Instant now = Instant.parse("2026-11-04T12:00:00Z");
+    // 실제 현재 시각 기준이어야 한다 — 적재 시 키 만료 = 발급 종료 + 7일(절대 시각)이라, 고정 날짜를 쓰면 그 날짜 + 7일이 지난 뒤
+    // 키가 적재 즉시 만료돼 NOT_READY 가 된다 (2026-11-04 고정값이 11-13 에 깨졌음)
+    private final Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
 
     @AfterEach
     void tearDown() {

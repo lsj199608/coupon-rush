@@ -131,6 +131,10 @@ app:
     timeout-sweep:
       enabled: true
       interval: PT30S                             # 마감 지난 PENDING 정리 주기
+    search:                                       # 자연어 이벤트 검색 (공개). LLM 을 못 쓰면 키워드 검색으로 대신한다
+      request-timeout: 15s                        # 검색창이라 짧게. 넘으면 키워드 검색 결과
+      per-minute: 10                              # 회원별, 비로그인은 IP별
+      per-day: 100
   auth:
     cookie:
       # refresh token 쿠키의 Secure 속성. 로컬(http)에서는 false, HTTPS 배포 시 true

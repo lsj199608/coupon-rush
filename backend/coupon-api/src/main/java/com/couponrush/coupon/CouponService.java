@@ -4,6 +4,8 @@ import com.couponrush.coupon.dto.CouponCreateRequest;
 import com.couponrush.coupon.dto.CouponResponse;
 import com.couponrush.coupon.dto.CouponStockResponse;
 import com.couponrush.coupon.issue.redis.RedisCouponStock;
+import com.couponrush.coupon.search.CouponSearchCondition;
+import com.couponrush.coupon.search.CouponSpecifications;
 import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
 import org.springframework.data.domain.PageRequest;
@@ -57,6 +59,23 @@ public class CouponService {
         Instant now = clock.instant();
         return coupons.stream()
                 .map(coupon -> CouponResponse.of(coupon, stocks.get(coupon.getId()), now))
+                .toList();
+    }
+
+    /**
+     * 조건 검색 (공개). 목록과 같은 정렬·개수(오픈 시각 최신순 50개)와 같은 응답 형식.
+     * availableOnly 는 SQL(DB 카운터)로 1차, Redis 재고로 2차 거른다 — 남은 수량 표시와 같은 기준이어야
+     * "남은 것만" 결과에 "남은 수량 0"이 보이지 않는다. (2차에서 빠지면 50개보다 적을 수 있다)
+     */
+    @Transactional(readOnly = true)
+    public List<CouponResponse> search(CouponSearchCondition condition) {
+        Instant now = clock.instant();
+        List<Coupon> coupons = couponRepository.findAll(CouponSpecifications.matching(condition, now),
+                PageRequest.of(0, LIST_LIMIT, Sort.by(Sort.Direction.DESC, "issueStartAt", "id"))).getContent();
+        Map<Long, Integer> stocks = redisCouponStock.getStocks(coupons.stream().map(Coupon::getId).toList());
+        return coupons.stream()
+                .map(coupon -> CouponResponse.of(coupon, stocks.get(coupon.getId()), now))
+                .filter(response -> !condition.availableOnly() || response.remainingQuantity() > 0)
                 .toList();
     }
 
