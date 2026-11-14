@@ -16,7 +16,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   구조화된 출력·거절(stop_reason=refusal)·사용 토큰·상태코드별 예외를 SDK가 그대로 제공해 재시도·서킷·예산 판정이 정확해서
 
 ## 구조
-- backend/ : Gradle 멀티모듈 루트 (gradlew 위치). coupon-api/ = 기존 Spring Boot 앱 전체, (7단계) llm-service/, libs/llm-contract/
+- backend/ : Gradle 멀티모듈 루트 (gradlew 위치). coupon-api/ = 기존 Spring Boot 앱 전체, (7단계) llm-service/, libs/llm-contract/, mcp-server/
 - frontend/ : React 프로젝트
 - infra/ : docker-compose.yml 등 인프라 설정
 - docs/ : 설계/실험 기록 (concurrency-notes.md: 동시성 재현·해결 리포트, 단계마다 결과 추가)
@@ -124,8 +124,11 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           한도 확인은 결과를 기다리지 않고 POST만 연속으로 (fake 꺼진 상태에서 폴링까지 하면 1회 15초라 분 한도에 안 걸림)
     - [x] A4) 프론트: 이벤트 목록 검색창(?q=) → AI 조건 칩 / 키워드 검색 안내 + 결과 카드 — 아래 "프론트엔드"의 "자연어 검색" 메모.
           브라우저 수동 확인 2026-11-13 통과 (AI 조건 칩·URL ?q=·뒤로 가기 재사용·llm-service 중단 시 키워드 검색 안내·전체 보기·모바일 폭)
-    - [ ] B1) mcp-server 모듈 (별도 서비스, 공식 MCP Java SDK, Streamable HTTP) — 조회 전용 도구
-          search_events / get_event / get_my_coupons, coupon-api 기존 조회 API를 호출하는 어댑터
+    - [x] B1) mcp-server 모듈 (8082, 공식 MCP Java SDK 2.1.0 코어, 서블릿 Streamable HTTP /mcp) — 조회 전용 도구
+          search_events(PENDING이면 최대 20초 기다려 한 번에) / get_event. get_my_coupons는 B2(인증)와 함께 — 아래 "MCP 서버 (mcp-server)" 메모.
+          실행 확인: bootRun → initialize 200 + 세션, 위조 Host 421, 루프백 외 주소 접속 불가.
+          Claude Code 연결 확인 2026-11-14(claude mcp add --transport http): 검색 AI_FILTER·상세·발급 요청은 링크 안내·coupon-api 중단 시 도구 오류 설명 OK.
+          B3에서 인증(B2)·get_my_coupons까지 다시 확인
     - [ ] B2) 인증: 서비스 토큰 + 사용자 ID는 서버가 주입 (모델이 userId를 인자로 고르지 못하게)
     - [ ] B3) 수동 확인: Claude Code에 MCP 서버 연결해 도구 호출
     - [ ] C1) coupon-api: V8 chat_sessions / chat_messages (V7은 A1에서 사용), 메시지 전송 API(202 + 폴링)
@@ -151,6 +154,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - llm-service 컨테이너(`docker compose --profile llm up -d --build`): 빌드 컨텍스트 backend/, Dockerfile은 llm-service/Dockerfile,
   .dockerignore가 build·.gradle·coupon-api/src 제외. 환경변수는 LLM_*·Kafka·Redis만 넘기고 .env를 통째로 주지 않는다(비밀값 분리).
   포트를 열지 않는다. 호스트 bootRun과 동시에 켜지 않는다(같은 컨슈머 그룹).
+  **계약(llm-contract)이나 llm-service 코드가 바뀌면 `--build`로 다시 빌드한다** — 2026-11-14 11-09 빌드 이미지가 EVENT_SEARCH를 몰라
+  역직렬화 실패 → DLT → 결과 없음 → 검색이 매번 FALLBACK/TIMEOUT이 됐다 (로그: "not one of the values accepted for Enum class").
 - 접속 정보/비밀값은 infra/.env 하나로 관리. docker-compose와 Spring(application.yml의
   spring.config.import: optional:file:../../infra/.env[.properties], 작업 폴더 backend/coupon-api 기준)이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
 - 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.
@@ -685,6 +690,27 @@ GET /api/coupons/search/{id} → PENDING / COMPLETED(AI 조건 filter + DB 결�
   CouponSearchTest(정렬·부분 일치·ALL/ANY·이스케이프·상태·기간 경계·Redis 재고·AND), KeywordQueryTest.
 - 테스트 메모: 고정 날짜로 Redis 적재하는 테스트는 키 만료(종료 + 7일, 절대 시각)가 지나면 깨진다 — RedisCouponStockTest가 2026-11-13에 깨져 현재 시각 기준으로 바꿈.
 
+### MCP 서버 (7단계 B1) — backend/mcp-server, com.couponrush.mcpserver, 포트 8082
+```
+MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Session-Id) ─▶ HttpServletStreamableServerTransportProvider
+  └▶ McpSyncServer (serverInfo coupon-rush, instructions: 조회 전용·발급은 url 안내)
+       ├ search_events {query 1~200자} → POST /api/coupons/search → PENDING이면 0.5초마다 GET .../{id} (최대 20초) → COMPLETED/FALLBACK
+       └ get_event {eventId ≥ 1}       → GET /api/coupons/{id}
+```
+- **SDK: io.modelcontextprotocol.sdk:mcp-core + mcp-json-jackson2 2.1.0** (Spring AI 없음). 2.2.0은 reactor-core 3.9.0-RC1 의존이라 Boot 3.5(reactor 3.7)와 안 맞음.
+  전송이 HttpServlet이라 ServletRegistrationBean(asyncSupported)으로 등록. API는 jar를 javap로 확인함 — Tool.builder()(인자 없음)·securityValidator는
+  deprecated → Tool.builder(name, jsonMapper, schemaJson), httpHeaderValidator 사용. MCP 프로토콜 매퍼는 Spring ObjectMapper와 분리(new ObjectMapper()).
+- 다른 모듈에 의존하지 않는다 (coupon-api와는 공개 REST만, 응답 DTO는 필요한 필드만 + ignoreUnknown).
+- 도구 결과: 본문은 JSON 문자열. 이벤트마다 statusLabel(한국어), 기간은 "yyyy-MM-dd HH:mm KST", **url = 프론트 이벤트 페이지(발급은 사람이 여기서)**.
+  search_events는 searchMethod AI_FILTER(조건 conditions) / KEYWORD(keywords + fallbackReason)를 알려 준다. 도구 주석 readOnly·idempotent·openWorld=false.
+- 실패는 예외가 아니라 isError=true + 한국어 설명 (모델이 읽고 인자를 고치거나 사용자에게 설명). 404 → "찾을 수 없습니다: {coupon-api 메시지}",
+  400 → 입력 오류, 5xx·연결 실패·검색 대기 초과 → 잠시 후 다시. coupon-api 타임아웃 연결 2초·응답 5초. 인자 검사는 핸들러도 직접 한다(빈 질문·0 이하 ID → coupon-api 호출 없음).
+- 보안 (B1, 인증 없음): server.address=127.0.0.1(루프백만), Host 허용 목록 app.mcp.allowed-hosts(DNS 리바인딩 방지, 위반 421). 컨테이너·외부 공개는 B2 인증 후.
+  coupon-api 입장에서 mcp-server는 비로그인 IP 127.0.0.1 하나 → 검색 한도(분 10)를 Vite 프록시의 비로그인 사용자와 나눠 씀 (B2에서 서비스 토큰·사용자로 정리).
+- 테스트 McpToolsTest: 공식 SDK 클라이언트(HttpClientStreamableHttpTransport)로 실제 연결, coupon-api는 WireMock. 포트 고정 18082
+  (Host 허용 목록을 기동 전에 정해야 해서 임의 포트 불가). 도구 목록·주석, PENDING 기다림(시나리오), FALLBACK, 대기 초과, 빈 인자, 404 메시지, 500, 연결 끊김 후 세션 유지.
+  Host 위조(421)는 Java HttpClient가 Host 헤더를 못 바꿔 자동 테스트 없음 — curl로 수동 확인.
+
 ### LLM 다음 기능 계획 (7단계 이후 기능, 2026-11-09 수립 — 미구현)
 ```
 [Claude Code 등 외부 MCP 클라이언트] ─┐
@@ -711,6 +737,7 @@ GET /api/coupons/search/{id} → PENDING / COMPLETED(AI 조건 filter + DB 결�
 - 프론트 테스트 / 빌드: `npm test` / `npm run build` (tsc 타입 검사 + vite build)
 - llm-service 실행(선택, 문구 생성용): 컨테이너 `cd infra; docker compose --profile llm up -d --build` (로그 `docker logs -f coupon-rush-llm-service`)
   또는 호스트 `cd backend; .\gradlew :llm-service:bootRun` → 8081 (fake 제공자). 둘 중 하나만
+- MCP 서버 실행: `cd backend; .\gradlew :mcp-server:bootRun` → http://localhost:8082/mcp (coupon-api 8080이 떠 있어야 도구가 동작)
 - 수동 확인 절차: docs/manual-check.md (로그인·발급·관리자·AI 문구·장애 격리·예산·모바일, 기록표 포함)
 - 하루 LLM 사용량: `docker exec coupon-rush-redis redis-cli HGETALL "llm:usage:$((Get-Date).ToString('yyyyMMdd'))"`
 - 전체 테스트: `cd backend; .\gradlew test` (모든 모듈). 한 모듈만: `.\gradlew :coupon-api:test`

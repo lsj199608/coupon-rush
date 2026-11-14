@@ -1,0 +1,30 @@
+// MCP(Model Context Protocol) 도구 서버. AI 클라이언트(Claude Code 등, 나중에 llm-service 챗봇)가 이벤트 조회를 "도구"로 부른다.
+// 도메인 로직·DB 없음 — coupon-api 의 기존 조회 API(REST)를 부르는 프로토콜 어댑터다.
+// coupon-api 안에 두지 않는 이유: 선착순 발급 서비스에 AI 용 프로토콜·트래픽·보안 노출면을 넣지 않는다 (llm-service 분리와 같은 원칙).
+// 다른 모듈에 의존하지 않는다 (coupon-api 와는 HTTP 로만 — 엔티티·계약을 공유하지 않음).
+plugins {
+	id 'org.springframework.boot'
+	id 'io.spring.dependency-management'
+}
+
+// 공식 MCP Java SDK. 2.2.0 은 reactor-core 3.9.0-RC1 에 의존해 Boot 3.5(reactor 3.7)와 맞지 않아 2.1.0 (reactor 3.7.0)
+def mcpSdkVersion = '2.1.0'
+
+dependencies {
+	// 서블릿 컨테이너(MCP Streamable HTTP 전송이 HttpServlet) + RestClient(coupon-api 호출)
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+	// 코어(서버·클라이언트·서블릿 전송) + Jackson 2 매퍼 (Boot 3.5 는 Jackson 2). Spring AI 는 쓰지 않는다
+	implementation "io.modelcontextprotocol.sdk:mcp-core:${mcpSdkVersion}"
+	implementation "io.modelcontextprotocol.sdk:mcp-json-jackson2:${mcpSdkVersion}"
+
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	// coupon-api 대신 HTTP 응답을 흉내 낸다 (테스트에 coupon-api·DB 불필요)
+	testImplementation 'org.wiremock:wiremock-standalone:3.9.2'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}

@@ -113,6 +113,24 @@ cd backend
 
 - 공개 API가 없습니다. coupon-api와 Kafka(`llm-requests` → `llm-results`)로만 통신하고, 8081은 헬스체크(`/actuator/health`)용입니다.
 
+### 2-2. (선택) MCP 서버: mcp-server (8082)
+
+AI 클라이언트(Claude Code 등)가 쿠폰 이벤트를 **조회 전용 도구**로 쓰게 해 주는 서버입니다. coupon-api(8080)의 공개 조회 API를 부릅니다.
+
+```powershell
+cd backend
+.\gradlew :mcp-server:bootRun      # → http://localhost:8082/mcp (MCP Streamable HTTP)
+```
+
+| 도구 | 하는 일 |
+|---|---|
+| `search_events` | 자연어 질문으로 이벤트 검색 (coupon-api 자연어 검색, AI를 못 쓰면 키워드 검색 결과) |
+| `get_event` | 이벤트 하나의 기간·상태·남은 수량 |
+
+- 발급 도구는 없습니다. 결과의 `url`(이벤트 페이지)에서 사용자가 직접 발급합니다.
+- 아직 인증이 없어서 이 PC(127.0.0.1)에서만 접속됩니다. 허용한 Host 헤더(`localhost:8082`, `127.0.0.1:8082`)가 아니면 421로 거절합니다 (DNS 리바인딩 방지).
+- 환경변수는 쓰지 않습니다 (설정은 `mcp-server/src/main/resources/application.yml`의 `app.mcp.*`).
+
 ### 3. 프론트엔드: Vite (5173)
 
 ```powershell
@@ -215,6 +233,7 @@ cd backend;  .\gradlew :coupon-api:benchmark   # (선택) 방식별 성능 측�
 backend/   Gradle 멀티모듈 루트
   coupon-api/   Spring Boot (com.couponrush.{auth, user, coupon, llm, global}), Flyway 마이그레이션, Lua 스크립트
   llm-service/  LLM 호출 전담 Spring Boot (Kafka 컨슈머, DB 없음)
+  mcp-server/   AI 클라이언트용 MCP 도구 서버 (coupon-api 조회 API 어댑터, DB 없음)
   libs/llm-contract/  두 서비스가 주고받는 Kafka 메시지 계약
 frontend/  React (src/{api, hooks, components, pages, auth, utils})
 infra/     docker-compose.yml, .env.example

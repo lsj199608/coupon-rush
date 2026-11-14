@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: mcp-server
+
+server:
+  port: 8082
+  # B1 은 인증이 없다 (B2 에서 서비스 토큰) → 이 PC 밖에서 접속하지 못하게 루프백에만 연다.
+  # 컨테이너로 띄울 때는 B2 인증을 붙인 뒤 0.0.0.0 으로 바꾼다
+  address: 127.0.0.1
+
+app:
+  mcp:
+    endpoint: /mcp                         # MCP Streamable HTTP 주소 (http://localhost:8082/mcp)
+    # DNS 리바인딩 방지: 이 Host 헤더로 온 요청만 받는다 (악성 웹페이지가 브라우저를 통해 로컬 서버를 부르지 못하게)
+    allowed-hosts: localhost:8082, 127.0.0.1:8082
+    coupon-api:
+      base-url: http://localhost:8080
+      connect-timeout: 2s
+      read-timeout: 5s
+    search:
+      # coupon-api 검색이 PENDING(AI 조건 생성 중)이면 기다렸다가 결과를 한 번에 돌려준다 (서버 마감 15초 + 여유)
+      wait-timeout: 20s
+      poll-interval: 500ms
+    # 이벤트 페이지 링크 (도구 결과에 넣는다 — 발급은 도구가 아니라 이 페이지에서)
+    frontend-base-url: http://localhost:5173
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
