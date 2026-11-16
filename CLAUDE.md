@@ -653,7 +653,7 @@ llm-service 처리 순서(LlmRequestProcessor): llm:done → 마감 → llm:infl
 - **기준 날짜 = 접수 시각(requestedAt)의 한국 날짜**(처리 시각 아님, KstDates). 모델에게도 날짜·요일만 주고 시각은 주지 않는다.
   범위는 날짜 경계(0시)로만 — 같은 날 같은 질문이면 같은 조건 → 캐시 가능. "지금 진행 중"은 시각 범위가 아니라 OPEN 상태로.
 - 캐시 키 = sha256(cacheIdentity(EVENT_SEARCH) + 정규화 질문 + 기준 날짜). 날짜가 바뀌면 "이번 주"의 뜻이 달라져 다른 키.
-  LlmClient.cacheIdentity(type): 문구는 기존 값 그대로(fake:v1, …event-copy.v1…)라 기존 캐시 유지, 검색은 fake:search.v1 / …event-search.v1….
+  LlmClient.cacheIdentity(type): 문구는 기존 값 그대로(fake:v1, …event-copy.v1…)라 기존 캐시 유지, 검색은 fake:search.v2(규칙 변경 때 올림) / …event-search.v1….
   ResponseCache.Entry(candidates, searchFilter, model) — 예전 캐시 값은 searchFilter=null로 읽힘. 쓸 수 없는 캐시 값은 실패가 아니라 캐시 없음으로 처리.
 - Anthropic: 출력 형식 EventSearchOutput은 계약과 일부러 다르다 — 기간은 **한국 날짜 문자열 YYYY-MM-DD, 양끝 포함**(모델에게 "이번 주 = 월~일"이
   자연스럽고 시간대 계산을 맡기지 않음), "조건 없음"은 null 대신 빈 문자열·빈 목록(스키마 필드가 모두 필수). EventSearchOutputValidator가
@@ -661,6 +661,7 @@ llm-service 처리 순서(LlmRequestProcessor): llm:done → 마감 → llm:infl
   재시도·서킷·거절·재생성 루프는 AnthropicLlmClient.generate 하나를 두 기능이 공유 (프롬프트·출력 형식·검증기만 다름).
 - fake 규칙: "진행 중" → OPEN, "오픈 예정"·"시작 전" → UPCOMING, "종료된"·"끝난" → ENDED("끝나는"은 기간), "남은"·"재고" → availableOnly,
   오늘/내일/이번 주/다음 주/이번 달 → "시작·오픈·열리는"이 있으면 시작 범위, 아니면 종료 범위. 나머지 단어 → keywords(조사·일반어 제거, 5개·50자).
+  "지금"·"현재"·"요즘"·"당장"은 키워드에서 뺀다(AI 조건은 키워드 ALL이라 남으면 진행 중 이벤트가 걸러짐 — 2026-11-16 수정).
   한 주는 월요일 시작. 실제 모델 품질이 아니라 흐름 확인용.
 - 테스트: FakeEventSearchTest, EventSearchOutputValidatorTest, AnthropicLlmClientTest(검색 요청 모양·성공·재생성 후 INVALID_OUTPUT·캐시 식별자),
   ResponseCacheKeyTest(날짜별 키), LlmRequestFlowTest(검색 → COMPLETED + 조건), CostControlFlowTest(검색 캐시, 문구 캐시와 안 섞임).

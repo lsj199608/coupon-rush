@@ -82,7 +82,7 @@ public class FakeLlmClient implements LlmClient {
         // 문구 생성은 기존 값 그대로 — 바꾸면 이미 쌓인 캐시가 쓸모없어진다
         return switch (type) {
             case EVENT_COPY -> "fake:v1";
-            case EVENT_SEARCH -> "fake:search.v1";
+            case EVENT_SEARCH -> "fake:search.v2";   // v2: 때를 가리키는 말(지금·현재…) 불용어 — 규칙이 바뀌면 올려 예전 캐시를 안 쓴다
         };
     }
 

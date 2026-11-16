@@ -44,6 +44,16 @@ class FakeEventSearchTest {
     }
 
     @Test
+    void 지금_현재_같은_때를_가리키는_말은_키워드로_남기지_않는다() {
+        EventSearchFilter now = search("지금 진행 중인 이벤트");
+        assertThat(now.statuses()).containsExactly(EventSearchStatus.OPEN);
+        assertThat(now.keywords()).as("키워드는 ALL 조건이라 남으면 진행 중 이벤트가 걸러진다").isEmpty();
+
+        assertThat(search("현재 받을 수 있는 커피 쿠폰").keywords()).containsExactly("커피");
+        assertThat(search("요즘 진행중인 치킨").keywords()).containsExactly("치킨");
+    }
+
+    @Test
     void 시작을_말하면_발급_시작_범위로_간다() {
         EventSearchFilter filter = search("내일 시작하는 이벤트");
 
