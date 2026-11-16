@@ -1,4 +1,4 @@
-package com.couponrush.coupon.issue.redis;
+package com.couponrush.coupon.stock;
 
 /** coupon-issue.lua 의 반환값 */
 public enum RedisIssueResult {

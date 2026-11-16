@@ -235,7 +235,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - 발급 기간은 [issueStartAt, issueEndAt) — 시작 포함, 종료 미포함.
 
 ### Redis 발급 (4단계, 기본 방식) — 상세: docs/concurrency-notes.md 4장
-코드: coupon/issue/redis/ (RedisCouponIssuer, RedisCouponStock), 스크립트: resources/redis/*.lua
+코드: coupon/stock/ (RedisCouponStock = Redis 재고 저장소, RedisIssueResult), coupon/issue/ (RedisCouponIssuer, RedisIssueRejections), 스크립트: resources/redis/*.lua
+- 패키지 (2026-11-16 정리): 재고는 발급 외에도 목록 조회(CouponService)·대조 점검·async가 함께 쓰므로 coupon/stock/에 둔다
+  (예전 coupon/issue/redis/는 상위 패키지가 하위에 의존하는 역방향이었음). 패키지는 기술(redis)이 아니라 역할로 나눈다.
 
 **설계 (발급 흐름)**
 1. `coupon-issue.lua` 한 번 호출 (원자적, DB 접근 없음): 적재 여부 → 기간 → 중복(SISMEMBER) → 재고(GET) → DECR + SADD

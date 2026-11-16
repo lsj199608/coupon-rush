@@ -942,8 +942,8 @@ return 1
 | `coupon/issue/ConditionalUpdateCouponIssuer` | 조건부 UPDATE |
 | `coupon/issue/PessimisticLockCouponIssuer` | `findByIdForUpdate` (`@Lock(PESSIMISTIC_WRITE)`) |
 | `coupon/issue/OptimisticLockCouponIssuer` | `@Version` + `TransactionTemplate` 재시도 (`app.coupon.issue.optimistic-max-attempts`, 기본 100) |
-| `coupon/issue/redis/RedisCouponIssuer` | Lua 판정 → SUCCESS일 때만 DB 저장 → 실패하면 보상 |
-| `coupon/issue/redis/RedisCouponStock` | Redis 키, Lua 스크립트 호출 (발급 / 적재 / 보상) |
+| `coupon/issue/RedisCouponIssuer` | Lua 판정 → SUCCESS일 때만 DB 저장 → 실패하면 보상 |
+| `coupon/stock/RedisCouponStock` | Redis 키, Lua 스크립트 호출 (발급 / 적재 / 보상) |
 | `resources/redis/*.lua` | `coupon-issue.lua`, `coupon-stock-load.lua`, `coupon-issue-restore.lua` |
 | `coupon/CouponService` | 생성 시 커밋 후 Redis 적재(`afterCommit`), `syncStock`(DB 기준 재적재) |
 | `coupon/CouponIssueService` | 설정된 방식으로 위임. **`@Transactional`을 붙이지 않는다** (낙관적 락 재시도가 깨짐) |

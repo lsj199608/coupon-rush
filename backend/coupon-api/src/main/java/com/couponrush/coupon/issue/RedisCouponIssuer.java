@@ -1,10 +1,9 @@
-package com.couponrush.coupon.issue.redis;
+package com.couponrush.coupon.issue;
 
 import com.couponrush.coupon.CouponIssue;
 import com.couponrush.coupon.CouponRepository;
-import com.couponrush.coupon.issue.CouponIssueSupport;
-import com.couponrush.coupon.issue.CouponIssuer;
-import com.couponrush.coupon.issue.IssueStrategy;
+import com.couponrush.coupon.stock.RedisCouponStock;
+import com.couponrush.coupon.stock.RedisIssueResult;
 import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
 import org.slf4j.Logger;

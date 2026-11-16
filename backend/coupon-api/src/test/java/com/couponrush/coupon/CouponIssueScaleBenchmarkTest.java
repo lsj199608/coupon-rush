@@ -4,7 +4,7 @@ import com.couponrush.IntegrationTest;
 import com.couponrush.coupon.ConcurrencyTestSupport.Result;
 import com.couponrush.coupon.issue.CouponIssuer;
 import com.couponrush.coupon.issue.IssueStrategy;
-import com.couponrush.coupon.issue.redis.RedisCouponStock;
+import com.couponrush.coupon.stock.RedisCouponStock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;

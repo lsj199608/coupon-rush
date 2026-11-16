@@ -1,4 +1,4 @@
-package com.couponrush.coupon.issue.redis;
+package com.couponrush.coupon.stock;
 
 import com.couponrush.coupon.Coupon;
 import org.springframework.core.io.ClassPathResource;

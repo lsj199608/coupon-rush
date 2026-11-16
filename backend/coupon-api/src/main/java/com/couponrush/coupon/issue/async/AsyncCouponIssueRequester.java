@@ -1,9 +1,9 @@
 package com.couponrush.coupon.issue.async;
 
-import com.couponrush.coupon.issue.redis.RedisCouponStock;
-import com.couponrush.coupon.issue.redis.RedisIssueRejections;
-import com.couponrush.coupon.issue.redis.RedisIssueResult;
+import com.couponrush.coupon.issue.RedisIssueRejections;
 import com.couponrush.coupon.request.PendingIssueRequestStore;
+import com.couponrush.coupon.stock.RedisCouponStock;
+import com.couponrush.coupon.stock.RedisIssueResult;
 import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
 import com.fasterxml.jackson.core.JsonProcessingException;

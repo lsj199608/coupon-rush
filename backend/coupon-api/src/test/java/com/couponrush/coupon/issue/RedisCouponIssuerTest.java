@@ -1,10 +1,11 @@
-package com.couponrush.coupon.issue.redis;
+package com.couponrush.coupon.issue;
 
 import com.couponrush.IntegrationTest;
 import com.couponrush.coupon.Coupon;
 import com.couponrush.coupon.CouponIssueRepository;
 import com.couponrush.coupon.CouponRepository;
 import com.couponrush.coupon.CouponService;
+import com.couponrush.coupon.stock.RedisCouponStock;
 import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
 import com.couponrush.user.OAuth2Provider;

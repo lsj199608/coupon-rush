@@ -1,7 +1,7 @@
 package com.couponrush.coupon;
 
 import com.couponrush.IntegrationTest;
-import com.couponrush.coupon.issue.redis.RedisCouponStock;
+import com.couponrush.coupon.stock.RedisCouponStock;
 import com.couponrush.user.OAuth2Provider;
 import com.couponrush.user.User;
 import com.couponrush.user.UserRepository;

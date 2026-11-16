@@ -3,7 +3,7 @@ package com.couponrush.coupon.reconcile;
 import com.couponrush.coupon.Coupon;
 import com.couponrush.coupon.CouponIssueRepository;
 import com.couponrush.coupon.CouponRepository;
-import com.couponrush.coupon.issue.redis.RedisCouponStock;
+import com.couponrush.coupon.stock.RedisCouponStock;
 import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
 import org.slf4j.Logger;

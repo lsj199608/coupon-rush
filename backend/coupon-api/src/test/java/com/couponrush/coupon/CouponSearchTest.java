@@ -2,9 +2,9 @@ package com.couponrush.coupon;
 
 import com.couponrush.IntegrationTest;
 import com.couponrush.coupon.dto.CouponResponse;
-import com.couponrush.coupon.issue.redis.RedisCouponStock;
-import com.couponrush.coupon.search.CouponSearchCondition;
 import com.couponrush.coupon.search.CouponSearchCondition.KeywordMatch;
+import com.couponrush.coupon.search.CouponSearchCondition;
+import com.couponrush.coupon.stock.RedisCouponStock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

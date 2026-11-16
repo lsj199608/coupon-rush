@@ -1,6 +1,7 @@
-package com.couponrush.coupon.issue.redis;
+package com.couponrush.coupon.issue;
 
 import com.couponrush.coupon.CouponRepository;
+import com.couponrush.coupon.stock.RedisIssueResult;
 import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
 import org.springframework.stereotype.Component;

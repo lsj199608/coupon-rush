@@ -2,8 +2,8 @@ package com.couponrush.coupon;
 
 import com.couponrush.IntegrationTest;
 import com.couponrush.coupon.ConcurrencyTestSupport.Result;
-import com.couponrush.coupon.issue.redis.RedisCouponIssuer;
-import com.couponrush.coupon.issue.redis.RedisCouponStock;
+import com.couponrush.coupon.issue.RedisCouponIssuer;
+import com.couponrush.coupon.stock.RedisCouponStock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

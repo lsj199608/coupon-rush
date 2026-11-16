@@ -2,7 +2,7 @@ package com.couponrush.coupon;
 
 import com.couponrush.coupon.issue.CouponIssuer;
 import com.couponrush.coupon.issue.IssueStrategy;
-import com.couponrush.coupon.issue.redis.RedisCouponStock;
+import com.couponrush.coupon.stock.RedisCouponStock;
 import com.couponrush.global.error.BusinessException;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
