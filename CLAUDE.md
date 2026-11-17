@@ -237,7 +237,11 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 ### Redis 발급 (4단계, 기본 방식) — 상세: docs/concurrency-notes.md 4장
 코드: coupon/stock/ (RedisCouponStock = Redis 재고 저장소, RedisIssueResult), coupon/issue/ (RedisCouponIssuer, RedisIssueRejections), 스크립트: resources/redis/*.lua
 - 패키지 (2026-11-16 정리): 재고는 발급 외에도 목록 조회(CouponService)·대조 점검·async가 함께 쓰므로 coupon/stock/에 둔다
-  (예전 coupon/issue/redis/는 상위 패키지가 하위에 의존하는 역방향이었음). 패키지는 기술(redis)이 아니라 역할로 나눈다.
+  (예전 coupon/issue/redis/에 있을 때는 발급과 무관한 대조 점검·목록 조회가 **발급 구현의 내부 패키지에 의존**했다 — 형제 기능 사이의 잘못된 의존).
+  패키지는 기술(redis)이 아니라 역할로 나눈다. 규칙은 ArchitectureTest(ArchUnit)가 검사한다.
+  남은 구조 한계: 상위 coupon 패키지에 도메인(Coupon·CouponIssue·Repository)과 애플리케이션(Service·Controller)이 섞여 있어
+  coupon ↔ coupon.issue/stock/search/dto 순환 의존이 있다 (하위는 도메인 때문에 위를, 서비스는 하위 기능 때문에 아래를 본다).
+  없애려면 도메인을 coupon/domain으로 내리면 된다 — 파일 이동이 커서 보류(2026-11-17).
 
 **설계 (발급 흐름)**
 1. `coupon-issue.lua` 한 번 호출 (원자적, DB 접근 없음): 적재 여부 → 기간 → 중복(SISMEMBER) → 재고(GET) → DECR + SADD

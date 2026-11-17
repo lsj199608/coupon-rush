@@ -28,6 +28,8 @@ dependencies {
 	testImplementation 'org.springframework.kafka:spring-kafka-test'
 	testImplementation 'org.awaitility:awaitility'   // 비동기(Kafka 컨슈머) 결과 대기
 	testImplementation 'org.springframework.security:spring-security-test'
+	// 패키지 의존 방향 규칙을 테스트로 고정 (ArchitectureTest — 발급 경로가 LLM 을 모른다 등)
+	testImplementation 'com.tngtech.archunit:archunit-junit5:1.5.1'
 	testImplementation 'org.testcontainers:junit-jupiter'
 	testImplementation 'org.testcontainers:postgresql'
 	testImplementation 'org.testcontainers:kafka'

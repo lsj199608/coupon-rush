@@ -1,5 +1,5 @@
 import type { EventSearchFilter } from '../api/search';
-import { STATUS_LABELS } from '../components/StatusBadge';
+import { STATUS_LABELS } from './eventStatus';
 
 const monthDay = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric' });
 
