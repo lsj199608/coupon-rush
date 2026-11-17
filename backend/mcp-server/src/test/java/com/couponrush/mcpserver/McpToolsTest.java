@@ -24,6 +24,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -32,8 +36,10 @@ import java.util.function.Supplier;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.anyRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.anyUrl;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalToJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
@@ -49,9 +55,14 @@ import static org.assertj.core.api.Assertions.assertThat;
         "server.port=18082",
         "app.mcp.allowed-hosts=localhost:18082",
         "app.mcp.search.wait-timeout=1s",
-        "app.mcp.search.poll-interval=50ms"
+        "app.mcp.search.poll-interval=50ms",
+        "app.mcp.auth.service-token=" + McpToolsTest.SERVICE_TOKEN,
+        "app.mcp.coupon-api.internal-token=" + McpToolsTest.INTERNAL_TOKEN
 })
 class McpToolsTest {
+
+    static final String SERVICE_TOKEN = "test-service-token";
+    static final String INTERNAL_TOKEN = "test-internal-token";
 
     static final WireMockServer couponApi = new WireMockServer(options().dynamicPort());
 
@@ -125,13 +136,13 @@ class McpToolsTest {
     // ───────────────────────── 연결·목록 ─────────────────────────
 
     @Test
-    void 서버_정보와_안내_조회_전용_도구_2개를_알려_준다() {
+    void 서버_정보와_안내_조회_전용_도구_3개를_알려_준다() {
         assertThat(initialized.serverInfo().name()).isEqualTo("coupon-rush");
         assertThat(initialized.instructions()).contains("조회 전용").contains("발급");
 
         List<Tool> tools = client.listTools().tools();
 
-        assertThat(tools).extracting(Tool::name).containsExactlyInAnyOrder("search_events", "get_event");
+        assertThat(tools).extracting(Tool::name).containsExactlyInAnyOrder("search_events", "get_event", "get_my_coupons");
         assertThat(tools).allSatisfy(tool -> {
             assertThat(tool.annotations().readOnlyHint()).isTrue();
             assertThat(tool.annotations().destructiveHint()).isFalse();
@@ -275,7 +286,190 @@ class McpToolsTest {
 
             assertThat(result.isError()).isTrue();
             assertThat(text(result)).contains("연결할 수 없습니다");
-            assertThat(client.listTools().tools()).as("도구 오류 뒤에도 같은 세션으로 계속 쓸 수 있다").hasSize(2);
+            assertThat(client.listTools().tools()).as("도구 오류 뒤에도 같은 세션으로 계속 쓸 수 있다").hasSize(3);
+        }
+    }
+
+    // ───────────────────────── 인증 · get_my_coupons ─────────────────────────
+
+    /** 헤더를 붙인 MCP 클라이언트 (사람 = Authorization: Bearer, 서버 = X-Mcp-Service-Token + X-Mcp-User-Id) */
+    private static McpSyncClient connect(Map<String, String> headers) {
+        McpSyncClient connected = McpClient.sync(HttpClientStreamableHttpTransport.builder("http://localhost:18082")
+                        .endpoint("/mcp")
+                        .jsonMapper(new JacksonMcpJsonMapper(new ObjectMapper()))
+                        .httpRequestCustomizer((builder, method, uri, body, context) -> headers.forEach(builder::header))
+                        .build())
+                .requestTimeout(Duration.ofSeconds(10))
+                .build();
+        connected.initialize();
+        return connected;
+    }
+
+    private static CallToolResult call(McpSyncClient with, String tool, Map<String, Object> arguments) {
+        try {
+            return with.callTool(new CallToolRequest(tool, arguments));
+        } finally {
+            with.closeGracefully();
+        }
+    }
+
+    private static final String MY_COUPONS = """
+            [{"issueId":11,"couponId":3,"couponName":"커피 50%","issuedAt":"2026-11-14T01:30:00Z"}]""";
+
+    @Nested
+    class get_my_coupons {
+
+        @Test
+        void 인자가_없는_도구다_누구인지는_모델이_고를_수_없다() {
+            Tool tool = client.listTools().tools().stream().filter(t -> t.name().equals("get_my_coupons")).findFirst().orElseThrow();
+
+            assertThat((Map<?, ?>) tool.inputSchema().get("properties")).isEmpty();
+            assertThat(tool.inputSchema().get("additionalProperties")).isEqualTo(false);
+            assertThat(tool.annotations().readOnlyHint()).isTrue();
+        }
+
+        @Test
+        void 사람의_access_token_을_coupon_api_에_그대로_넘겨_본인_쿠폰을_돌려준다() throws Exception {
+            couponApi.stubFor(get("/api/users/me/coupons").withHeader("Authorization", equalTo("Bearer user-token"))
+                    .willReturn(okJson(MY_COUPONS)));
+
+            JsonNode body = json(call(connect(Map.of("Authorization", "Bearer user-token")), "get_my_coupons", Map.of()));
+
+            assertThat(body.get("count").asInt()).isEqualTo(1);
+            JsonNode coupon = body.get("coupons").get(0);
+            assertThat(coupon.get("eventName").asText()).isEqualTo("커피 50%");
+            assertThat(coupon.get("issuedAt").asText()).isEqualTo("2026-11-14 10:30 KST");
+            assertThat(coupon.get("url").asText()).isEqualTo("http://localhost:5173/events/3");
+        }
+
+        @Test
+        void 인증이_없으면_coupon_api_를_부르지_않고_로그인_안내() {
+            CallToolResult result = call("get_my_coupons", Map.of());
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).contains("로그인이 필요합니다").contains("Authorization: Bearer");
+            couponApi.verify(0, anyRequestedFor(anyUrl()));
+        }
+
+        @Test
+        void 토큰이_만료되면_coupon_api_의_사유와_함께_로그인_안내() {
+            couponApi.stubFor(get("/api/users/me/coupons").willReturn(aResponse().withStatus(401)
+                    .withHeader("Content-Type", "application/json")
+                    .withBody("{\"code\":\"TOKEN_EXPIRED\",\"message\":\"토큰이 만료되었습니다.\"}")));
+
+            CallToolResult result = call(connect(Map.of("Authorization", "Bearer old-token")), "get_my_coupons", Map.of());
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).contains("로그인이 필요합니다: 토큰이 만료되었습니다.");
+        }
+
+        @Test
+        void 서비스_토큰과_사용자_ID_면_coupon_api_내부_API_로_그_사용자_쿠폰을_조회한다() throws Exception {
+            couponApi.stubFor(get("/internal/users/5/coupons").withHeader("X-Internal-Token", equalTo(INTERNAL_TOKEN))
+                    .willReturn(okJson(MY_COUPONS)));
+
+            JsonNode body = json(call(connect(Map.of("X-Mcp-Service-Token", SERVICE_TOKEN, "X-Mcp-User-Id", "5")),
+                    "get_my_coupons", Map.of()));
+
+            assertThat(body.get("count").asInt()).isEqualTo(1);
+            couponApi.verify(getRequestedFor(urlEqualTo("/internal/users/5/coupons")).withoutHeader("Authorization"));
+        }
+
+        @Test
+        void 도구_인자로_다른_사용자를_지정해도_무시되거나_거절된다() {
+            couponApi.stubFor(get("/internal/users/5/coupons").willReturn(okJson("[]")));
+            couponApi.stubFor(get("/internal/users/9/coupons").willReturn(okJson(MY_COUPONS)));
+
+            McpSyncClient service = connect(Map.of("X-Mcp-Service-Token", SERVICE_TOKEN, "X-Mcp-User-Id", "5"));
+            try {
+                CallToolResult result = service.callTool(new CallToolRequest("get_my_coupons", Map.of("userId", 9)));
+                if (!result.isError()) {
+                    assertThat(text(result)).doesNotContain("커피 50%");
+                }
+            } catch (McpError rejected) {
+                // 입력 스키마(additionalProperties=false) 위반으로 거절 — 이것도 정답
+            } finally {
+                service.closeGracefully();
+            }
+            couponApi.verify(0, getRequestedFor(urlEqualTo("/internal/users/9/coupons")));
+        }
+
+        @Test
+        void 서비스_호출이라도_사용자가_없으면_로그인_안내() {
+            CallToolResult result = call(connect(Map.of("X-Mcp-Service-Token", SERVICE_TOKEN)), "get_my_coupons", Map.of());
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).contains("로그인이 필요합니다");
+            couponApi.verify(0, anyRequestedFor(anyUrl()));
+        }
+
+        @Test
+        void 내부_API_가_토큰을_거절하면_사용자_탓이_아닌_서버_오류로_알린다() {
+            couponApi.stubFor(get("/internal/users/5/coupons").willReturn(aResponse().withStatus(401)
+                    .withHeader("Content-Type", "application/json")
+                    .withBody("{\"code\":\"UNAUTHORIZED\",\"message\":\"인증이 필요합니다.\"}")));
+
+            CallToolResult result = call(connect(Map.of("X-Mcp-Service-Token", SERVICE_TOKEN, "X-Mcp-User-Id", "5")),
+                    "get_my_coupons", Map.of());
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).contains("내부 연결").doesNotContain("로그인이 필요");
+        }
+
+        @Test
+        void 검색은_사람의_토큰을_함께_보내_한도를_회원별로_센다() throws Exception {
+            couponApi.stubFor(post("/api/coupons/search").willReturn(okJson("""
+                    {"requestId":null,"status":"FALLBACK","query":"치킨","fallbackReason":"RATE_LIMITED","keywords":["치킨"],"events":[]}""")));
+
+            json(call(connect(Map.of("Authorization", "Bearer user-token")), "search_events", Map.of("query", "치킨")));
+
+            couponApi.verify(postRequestedFor(urlEqualTo("/api/coupons/search")).withHeader("Authorization", equalTo("Bearer user-token")));
+        }
+    }
+
+    // ───────────────────────── 연결 단계 인증 (HTTP) ─────────────────────────
+
+    @Nested
+    class 연결_인증 {
+
+        final HttpClient http = HttpClient.newHttpClient();
+
+        /** MCP initialize 요청을 직접 보내 HTTP 상태만 본다 (SDK 클라이언트는 거절 사유를 예외 하나로 감싸서) */
+        private int initialize(Map<String, String> headers) throws Exception {
+            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://localhost:18082/mcp"))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json, text/event-stream")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18",
+                             "capabilities":{},"clientInfo":{"name":"test","version":"1"}}}"""));
+            headers.forEach(request::header);
+            return http.send(request.build(), HttpResponse.BodyHandlers.discarding()).statusCode();
+        }
+
+        @Test
+        void 맞는_서비스_토큰_사람_토큰_인증_없음은_연결된다() throws Exception {
+            assertThat(initialize(Map.of("X-Mcp-Service-Token", SERVICE_TOKEN, "X-Mcp-User-Id", "5"))).isEqualTo(200);
+            assertThat(initialize(Map.of("Authorization", "Bearer anything"))).isEqualTo(200);
+            assertThat(initialize(Map.of())).isEqualTo(200);
+        }
+
+        @Test
+        void 틀린_서비스_토큰은_401() throws Exception {
+            assertThat(initialize(Map.of("X-Mcp-Service-Token", "wrong", "X-Mcp-User-Id", "5"))).isEqualTo(401);
+            assertThat(initialize(Map.of("X-Mcp-Service-Token", ""))).isEqualTo(401);
+        }
+
+        @Test
+        void 서비스_토큰_없이_사용자_ID_만_보내면_401() throws Exception {
+            assertThat(initialize(Map.of("X-Mcp-User-Id", "5"))).isEqualTo(401);
+            assertThat(initialize(Map.of("X-Mcp-User-Id", "5", "Authorization", "Bearer user-token"))).isEqualTo(401);
+        }
+
+        @Test
+        void 서비스_토큰과_사람_토큰을_함께_보내거나_사용자_ID_가_잘못되면_400() throws Exception {
+            assertThat(initialize(Map.of("X-Mcp-Service-Token", SERVICE_TOKEN, "Authorization", "Bearer user-token"))).isEqualTo(400);
+            assertThat(initialize(Map.of("X-Mcp-Service-Token", SERVICE_TOKEN, "X-Mcp-User-Id", "abc"))).isEqualTo(400);
+            assertThat(initialize(Map.of("X-Mcp-Service-Token", SERVICE_TOKEN, "X-Mcp-User-Id", "0"))).isEqualTo(400);
         }
     }
 }

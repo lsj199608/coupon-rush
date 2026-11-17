@@ -36,6 +36,11 @@ public final class CouponApiDtos {
         }
     }
 
+    /** GET /api/users/me/coupons, GET /internal/users/{id}/coupons 의 한 항목 */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record MyCoupon(long issueId, long couponId, String couponName, Instant issuedAt) {
+    }
+
     /** coupon-api 에러 응답 {"code","message"} */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ApiError(String code, String message) {

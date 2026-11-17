@@ -129,7 +129,10 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           실행 확인: bootRun → initialize 200 + 세션, 위조 Host 421, 루프백 외 주소 접속 불가.
           Claude Code 연결 확인 2026-11-14(claude mcp add --transport http): 검색 AI_FILTER·상세·발급 요청은 링크 안내·coupon-api 중단 시 도구 오류 설명 OK.
           B3에서 인증(B2)·get_my_coupons까지 다시 확인
-    - [ ] B2) 인증: 서비스 토큰 + 사용자 ID는 서버가 주입 (모델이 userId를 인자로 고르지 못하게)
+    - [x] B2) 인증 + get_my_coupons(인자 없음) — 2026-11-17 결정: 사람은 access token 직접 입력(OAuth는 외부 공개 때), 서비스 토큰도 B2에서.
+          사람 = Authorization: Bearer → coupon-api /api/users/me/coupons에 그대로 전달 / 서버(C2 챗봇) = X-Mcp-Service-Token + X-Mcp-User-Id
+          → coupon-api 내부 API GET /internal/users/{id}/coupons(X-Internal-Token, ROLE_INTERNAL_SERVICE). 새 env MCP_SERVICE_TOKEN·INTERNAL_API_TOKEN
+          — 아래 "MCP 서버" 메모의 "인증 (B2)". 테스트: McpToolsTest(get_my_coupons·연결 인증), InternalApiTest
     - [ ] B3) 수동 확인: Claude Code에 MCP 서버 연결해 도구 호출
     - [ ] C1) coupon-api: V8 chat_sessions / chat_messages (V7은 A1에서 사용), 메시지 전송 API(202 + 폴링)
     - [ ] C2) llm-service ChatOrchestrator: tool use 루프(MCP 클라이언트), 도구 호출 최대 5회·턴당 토큰 상한·마감, 기존 예산·레이트 리밋 재사용
@@ -203,6 +206,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - Security: 기본은 전부 인증 필요. 공개 경로는 /actuator/health, POST /api/auth/refresh, GET /api/coupons, GET /api/coupons/*,
   POST /api/coupons/search, GET /api/coupons/search/* (A3).
   /api/admin/**는 ROLE_ADMIN. stateless, CSRF/폼로그인 off (OAuth2 state 보관에만 세션 잠깐 사용).
+- 서비스 간 내부 API /internal/** (B2): X-Internal-Token = INTERNAL_API_TOKEN이면 ROLE_INTERNAL_SERVICE (InternalServiceAuthenticationFilter).
+  사용자 JWT(ADMIN 포함)로는 403 — 경로의 userId를 그대로 믿는 API라서. 토큰은 /internal/**에서만 동작(사용자 API에 못 씀), 미설정이면 전부 401(닫힘),
+  비교는 MessageDigest.isEqual. Vite 프록시는 /api만 넘기므로 브라우저에서 닿지 않고, 배포 시 리버스 프록시도 /internal/**을 내보내지 않는다.
 - JWT에는 userId(sub), token_type(access|refresh), jti만 담고 access에만 role 추가. 개인정보는 넣지 않는다.
   token_type으로 refresh를 Bearer로 쓰는 것(또는 반대)을 막는다.
 - 토큰 전달 (6단계에서 변경): **URL에는 토큰을 싣지 않는다.** 로그인 성공 시 refresh만 HttpOnly 쿠키로 심고
@@ -705,12 +711,13 @@ GET /api/coupons/search/{id} → PENDING / COMPLETED(AI 조건 filter + DB 결�
   CouponSearchTest(정렬·부분 일치·ALL/ANY·이스케이프·상태·기간 경계·Redis 재고·AND), KeywordQueryTest.
 - 테스트 메모: 고정 날짜로 Redis 적재하는 테스트는 키 만료(종료 + 7일, 절대 시각)가 지나면 깨진다 — RedisCouponStockTest가 2026-11-13에 깨져 현재 시각 기준으로 바꿈.
 
-### MCP 서버 (7단계 B1) — backend/mcp-server, com.couponrush.mcpserver, 포트 8082
+### MCP 서버 (7단계 B1·B2) — backend/mcp-server, com.couponrush.mcpserver, 포트 8082
 ```
 MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Session-Id) ─▶ HttpServletStreamableServerTransportProvider
   └▶ McpSyncServer (serverInfo coupon-rush, instructions: 조회 전용·발급은 url 안내)
        ├ search_events {query 1~200자} → POST /api/coupons/search → PENDING이면 0.5초마다 GET .../{id} (최대 20초) → COMPLETED/FALLBACK
-       └ get_event {eventId ≥ 1}       → GET /api/coupons/{id}
+       ├ get_event {eventId ≥ 1}       → GET /api/coupons/{id}
+       └ get_my_coupons {} (B2, 로그인) → 사람: GET /api/users/me/coupons (Bearer 그대로) / 서버: GET /internal/users/{id}/coupons
 ```
 - **SDK: io.modelcontextprotocol.sdk:mcp-core + mcp-json-jackson2 2.1.0** (Spring AI 없음). 2.2.0은 reactor-core 3.9.0-RC1 의존이라 Boot 3.5(reactor 3.7)와 안 맞음.
   전송이 HttpServlet이라 ServletRegistrationBean(asyncSupported)으로 등록. API는 jar를 javap로 확인함 — Tool.builder()(인자 없음)·securityValidator는
@@ -720,8 +727,21 @@ MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Sessio
   search_events는 searchMethod AI_FILTER(조건 conditions) / KEYWORD(keywords + fallbackReason)를 알려 준다. 도구 주석 readOnly·idempotent·openWorld=false.
 - 실패는 예외가 아니라 isError=true + 한국어 설명 (모델이 읽고 인자를 고치거나 사용자에게 설명). 404 → "찾을 수 없습니다: {coupon-api 메시지}",
   400 → 입력 오류, 5xx·연결 실패·검색 대기 초과 → 잠시 후 다시. coupon-api 타임아웃 연결 2초·응답 5초. 인자 검사는 핸들러도 직접 한다(빈 질문·0 이하 ID → coupon-api 호출 없음).
-- 보안 (B1, 인증 없음): server.address=127.0.0.1(루프백만), Host 허용 목록 app.mcp.allowed-hosts(DNS 리바인딩 방지, 위반 421). 컨테이너·외부 공개는 B2 인증 후.
-  coupon-api 입장에서 mcp-server는 비로그인 IP 127.0.0.1 하나 → 검색 한도(분 10)를 Vite 프록시의 비로그인 사용자와 나눠 씀 (B2에서 서비스 토큰·사용자로 정리).
+- 보안: server.address=127.0.0.1(루프백만 — 공개 도구는 인증 없이 쓰므로), Host 허용 목록 app.mcp.allowed-hosts(DNS 리바인딩 방지, 위반 421).
+  컨테이너로 띄울 때(C2)는 compose 내부 네트워크만, 호스트 포트는 열지 않는다.
+- **인증 (B2)** — auth/Caller(Anonymous / User(accessToken) / Service(userId)), auth/CallerAuthentication:
+  **누구인지는 HTTP 헤더로만, 도구 인자로는 절대 안 받는다** (get_my_coupons 스키마는 properties {} + additionalProperties false — 프롬프트 인젝션으로 남의 쿠폰 조회 방지).
+  | 헤더 | Caller | get_my_coupons |
+  |---|---|---|
+  | Authorization: Bearer {access} | User | GET /api/users/me/coupons에 같은 Bearer (mcp-server는 검증 안 함, 만료·블랙리스트는 coupon-api) |
+  | X-Mcp-Service-Token(=MCP_SERVICE_TOKEN) + X-Mcp-User-Id | Service | GET /internal/users/{id}/coupons + X-Internal-Token(=INTERNAL_API_TOKEN) |
+  | 없음 / 서비스 토큰만 | Anonymous / Service(null) | 호출 없이 "로그인이 필요합니다" 도구 오류 |
+  거절(HTTP, initialize부터): 틀린 서비스 토큰·사용자 ID만 → 401, 서비스 토큰 + Bearer 함께·잘못된 사용자 ID·중복 헤더 → 400.
+  SDK 연결: httpHeaderValidator(Host → 인증 순서) + contextExtractor(**HTTP 요청마다** Caller → exchange.transportContext()) — 세션 단위가 아니라 토큰을 바꾸면 다음 호출부터 반영.
+  coupon-api 401: 사람 경로는 UNAUTHENTICATED("로그인이 필요합니다: {사유}" + 토큰 넣는 법), 내부 경로는 설정 오류라 UNAVAILABLE + ERROR 로그(두 서비스 INTERNAL_API_TOKEN 불일치).
+  검색도 사람의 Bearer를 함께 보내 한도를 회원별로 (공개 경로라 만료 토큰이면 비로그인 처리). 서비스 호출의 검색은 아직 IP 한도(C2에서 정리).
+  토큰 두 개를 나눈 이유: 구간마다 필요한 것만 가진다(llm-service는 coupon-api 내부 토큰을 모름, coupon-api는 MCP 토큰을 모름).
+  mcp-server도 infra/.env를 읽는다(spring.config.import, 작업 폴더 backend/mcp-server).
 - 테스트 McpToolsTest: 공식 SDK 클라이언트(HttpClientStreamableHttpTransport)로 실제 연결, coupon-api는 WireMock. 포트 고정 18082
   (Host 허용 목록을 기동 전에 정해야 해서 임의 포트 불가). 도구 목록·주석, PENDING 기다림(시나리오), FALLBACK, 대기 초과, 빈 인자, 404 메시지, 500, 연결 끊김 후 세션 유지.
   Host 위조(421)는 Java HttpClient가 Host 헤더를 못 바꿔 자동 테스트 없음 — curl로 수동 확인.

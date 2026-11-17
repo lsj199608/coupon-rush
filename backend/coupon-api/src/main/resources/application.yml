@@ -93,6 +93,9 @@ jwt:
   refresh-token-validity: ${JWT_REFRESH_TOKEN_VALIDITY:14d}
 
 app:
+  # 서비스 간 내부 API(/internal/**) 토큰 — mcp-server 가 X-Internal-Token 으로 보낸다. 비우면 내부 API 가 꺼진다 (모든 요청 401)
+  internal-api:
+    token: ${INTERNAL_API_TOKEN:}
   kafka:
     replicas: ${KAFKA_TOPIC_REPLICAS:1}   # 로컬 단일 브로커. 운영은 3 (+ min.insync.replicas=2)
     topic:

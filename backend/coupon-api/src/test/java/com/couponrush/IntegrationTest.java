@@ -25,6 +25,8 @@ import java.lang.annotation.Target;
         "GOOGLE_CLIENT_SECRET=test-google-client-secret",
         "JWT_SECRET=test-jwt-secret-key-must-be-at-least-32-bytes",
         "FRONTEND_OAUTH2_REDIRECT_URI=http://localhost:5173/oauth/callback",
+        // 서비스 간 내부 API 토큰 (InternalApiTest)
+        "INTERNAL_API_TOKEN=test-internal-token",
         // 대조 점검 스케줄러는 끈다 (테스트는 CouponStockReconciler 를 직접 호출) — 백그라운드 실행이 테스트 데이터를 읽지 않게
         "app.coupon.reconcile.enabled=false",
         // LLM 타임아웃 정리 스케줄러도 끈다 (테스트는 LlmRequestTimeouts.sweep() 을 직접 호출)

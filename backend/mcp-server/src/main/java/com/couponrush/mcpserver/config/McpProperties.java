@@ -14,6 +14,7 @@ import java.util.List;
  * @param couponApi       coupon-api 호출 설정
  * @param search          검색 도구가 PENDING 을 기다리는 방식
  * @param frontendBaseUrl 결과에 넣을 이벤트 페이지 링크의 앞부분
+ * @param auth            서비스 호출(챗봇 서버) 인증
  */
 @ConfigurationProperties("app.mcp")
 public record McpProperties(
@@ -21,11 +22,23 @@ public record McpProperties(
         @DefaultValue List<String> allowedHosts,
         @DefaultValue CouponApi couponApi,
         @DefaultValue Search search,
-        @DefaultValue("http://localhost:5173") String frontendBaseUrl) {
+        @DefaultValue("http://localhost:5173") String frontendBaseUrl,
+        @DefaultValue Auth auth) {
 
+    /**
+     * @param internalToken coupon-api 내부 API(/internal/**)용 X-Internal-Token (INTERNAL_API_TOKEN). 서비스 호출의 "사용자 쿠폰"에만 쓴다.
+     *                      비우면 그 기능만 꺼진다 (사람이 Bearer 로 쓰는 도구는 그대로)
+     */
     public record CouponApi(@DefaultValue("http://localhost:8080") String baseUrl,
                             @DefaultValue("2s") Duration connectTimeout,
-                            @DefaultValue("5s") Duration readTimeout) {
+                            @DefaultValue("5s") Duration readTimeout,
+                            @DefaultValue("") String internalToken) {
+    }
+
+    /**
+     * @param serviceToken 서버(llm-service)가 X-Mcp-Service-Token 으로 보내야 하는 값 (MCP_SERVICE_TOKEN). 비우면 서비스 호출을 받지 않는다
+     */
+    public record Auth(@DefaultValue("") String serviceToken) {
     }
 
     /**

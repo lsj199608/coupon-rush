@@ -1,5 +1,6 @@
 package com.couponrush.mcpserver.config;
 
+import com.couponrush.mcpserver.auth.CallerAuthentication;
 import com.couponrush.mcpserver.tool.EventTools;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.json.McpJsonMapper;
@@ -33,6 +34,7 @@ public class McpServerConfig {
     static final String INSTRUCTIONS = """
             선착순 쿠폰 이벤트를 조회하는 도구 서버입니다. 모든 도구는 조회 전용입니다.
             사용자가 이벤트를 찾으면 search_events 에 사용자의 질문을 그대로 넘기고, 특정 이벤트를 자세히 보려면 get_event 를 씁니다.
+            사용자가 자기가 받은 쿠폰을 물으면 get_my_coupons 를 씁니다 (로그인 필요, 사용자는 연결 인증으로 정해짐).
             쿠폰 발급은 이 서버로 할 수 없습니다. 발급을 원하면 결과의 url(이벤트 페이지)을 안내하세요.
             남은 수량은 조회 시점 값이며 선착순이라 금방 바뀔 수 있습니다.""";
 
@@ -45,12 +47,23 @@ public class McpServerConfig {
         return new JacksonMcpJsonMapper(new ObjectMapper());
     }
 
+    /**
+     * 헤더 검사는 Host(DNS 리바인딩) → 인증(CallerAuthentication) 순서. 둘 다 통과해야 MCP 메시지를 처리한다.
+     * contextExtractor 는 HTTP 요청마다 호출자(Caller)를 만들어 도구 핸들러에 넘긴다 — 세션이 아니라 요청 단위라
+     * 같은 세션에서 토큰을 바꿔 보내면 다음 호출부터 바뀐 토큰이 쓰인다.
+     */
     @Bean
-    HttpServletStreamableServerTransportProvider mcpTransport(McpJsonMapper mcpJsonMapper, McpProperties properties) {
+    HttpServletStreamableServerTransportProvider mcpTransport(McpJsonMapper mcpJsonMapper, McpProperties properties,
+                                                              CallerAuthentication callerAuthentication) {
+        ServerHttpHeaderValidator hostValidator = hostValidator(properties);
         return HttpServletStreamableServerTransportProvider.builder()
                 .jsonMapper(mcpJsonMapper)
                 .mcpEndpoint(properties.endpoint())
-                .httpHeaderValidator(headerValidator(properties))
+                .httpHeaderValidator(headers -> {
+                    hostValidator.validate(headers);
+                    callerAuthentication.validate(headers);
+                })
+                .contextExtractor(callerAuthentication)
                 .build();
     }
 
@@ -58,7 +71,7 @@ public class McpServerConfig {
      * DNS 리바인딩 방지 (MCP 명세 권고): 악성 웹페이지가 브라우저를 이용해 localhost 의 MCP 서버를 부르면 Host 가 공격자 도메인이 된다
      * → 허용 목록에 없는 Host 는 거절. 목록이 비면 검사하지 않는다 (경고).
      */
-    private static ServerHttpHeaderValidator headerValidator(McpProperties properties) {
+    private static ServerHttpHeaderValidator hostValidator(McpProperties properties) {
         if (properties.allowedHosts().isEmpty()) {
             log.warn("app.mcp.allowed-hosts 가 비어 있어 Host 헤더를 검사하지 않습니다 (DNS 리바인딩 방지 꺼짐)");
             return ServerHttpHeaderValidator.NOOP;

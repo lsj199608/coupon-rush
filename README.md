@@ -126,10 +126,23 @@ cd backend
 |---|---|
 | `search_events` | 자연어 질문으로 이벤트 검색 (coupon-api 자연어 검색, AI를 못 쓰면 키워드 검색 결과) |
 | `get_event` | 이벤트 하나의 기간·상태·남은 수량 |
+| `get_my_coupons` | **로그인한 본인**이 받은 쿠폰 (인자 없음 — 누구인지는 연결 인증으로만 정해짐) |
 
 - 발급 도구는 없습니다. 결과의 `url`(이벤트 페이지)에서 사용자가 직접 발급합니다.
-- 아직 인증이 없어서 이 PC(127.0.0.1)에서만 접속됩니다. 허용한 Host 헤더(`localhost:8082`, `127.0.0.1:8082`)가 아니면 421로 거절합니다 (DNS 리바인딩 방지).
-- 환경변수는 쓰지 않습니다 (설정은 `mcp-server/src/main/resources/application.yml`의 `app.mcp.*`).
+- 이 PC(127.0.0.1)에서만 접속됩니다. 허용한 Host 헤더(`localhost:8082`, `127.0.0.1:8082`)가 아니면 421로 거절합니다 (DNS 리바인딩 방지).
+
+**인증** — 검색·상세는 인증 없이 됩니다. `get_my_coupons`는 로그인이 필요합니다.
+
+| 누가 | 보내는 헤더 | mcp-server가 하는 일 |
+|---|---|---|
+| 사람 (Claude Code 등) | `Authorization: Bearer <coupon-api access token>` | 토큰을 coupon-api `GET /api/users/me/coupons`에 그대로 전달 (검증·만료 판정은 coupon-api) |
+| 서버 (C2 챗봇, llm-service) | `X-Mcp-Service-Token` + `X-Mcp-User-Id` | 서비스 토큰 확인 → coupon-api 내부 API `GET /internal/users/{id}/coupons` (`X-Internal-Token`) |
+
+Claude Code에서 내 쿠폰까지 쓰려면 access token(30분)을 연결 설정에 넣습니다.
+1. 브라우저(5173)에서 로그인 → 개발자 도구(F12) **네트워크** 탭에서 `refresh` 요청의 응답 `accessToken` 값을 복사
+2. `claude mcp add --transport http coupon-rush http://localhost:8082/mcp --header "Authorization: Bearer <복사한 값>"`
+   (이미 추가했다면 `claude mcp remove coupon-rush` 후 다시 추가). 30분이 지나면 도구가 "로그인이 필요합니다"라고 알려 주니 같은 방법으로 바꿉니다.
+- 서비스 인증은 `infra/.env`의 `MCP_SERVICE_TOKEN`, `INTERNAL_API_TOKEN`이 있을 때만 켜집니다 (없으면 그 경로만 꺼지고, 사람의 Bearer 경로는 그대로 동작).
 
 ### 3. 프론트엔드: Vite (5173)
 
@@ -203,6 +216,8 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 | `LLM_API_KEY` | (없음) | Anthropic API 키. **비밀값**, llm-service만 읽음 |
 | `LLM_MODEL` | `claude-sonnet-5-5` | 모델 ID (예: `claude-haiku-5-5`, `claude-opus-5-5`) |
 | `LLM_DAILY_TOKEN_BUDGET` | `50000` | 서비스 전체 하루 토큰(입력+출력) 예산, 한국 자정 초기화. 넘으면 문구 생성 요청을 접수 단계에서 429로 거절 |
+| `MCP_SERVICE_TOKEN` | (없음 = 꺼짐) | 챗봇 서버(llm-service) → mcp-server 서비스 인증 값(`X-Mcp-Service-Token`). **비밀값**. 사람이 Claude Code로 쓸 때는 필요 없음 |
+| `INTERNAL_API_TOKEN` | (없음 = 꺼짐) | mcp-server → coupon-api 내부 API(`/internal/**`) 인증 값(`X-Internal-Token`). **비밀값**, coupon-api·mcp-server가 같은 값을 읽음. `MCP_SERVICE_TOKEN`과 다르게 |
 
 `.env`는 기동할 때만 읽습니다. 값을 바꾸면 `bootRun`(포트·DB 값이면 `docker compose`도)을 다시 시작하세요.
 

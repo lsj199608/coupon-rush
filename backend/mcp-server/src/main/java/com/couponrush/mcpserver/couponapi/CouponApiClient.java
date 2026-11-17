@@ -1,11 +1,15 @@
 package com.couponrush.mcpserver.couponapi;
 
+import com.couponrush.mcpserver.auth.Caller;
 import com.couponrush.mcpserver.config.McpProperties;
 import com.couponrush.mcpserver.couponapi.CouponApiDtos.CouponEvent;
+import com.couponrush.mcpserver.couponapi.CouponApiDtos.MyCoupon;
 import com.couponrush.mcpserver.couponapi.CouponApiDtos.SearchResult;
 import com.couponrush.mcpserver.couponapi.CouponApiException.Kind;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -16,12 +20,16 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
 /**
- * coupon-api 공개 조회 API 호출. 도메인 판단은 하지 않는다 — 응답을 그대로 받아 도구에 넘긴다.
+ * coupon-api 조회 API 호출. 도메인 판단은 하지 않는다 — 응답을 그대로 받아 도구에 넘긴다.
  * 짧은 타임아웃(연결 2초·응답 5초): AI 클라이언트의 도구 호출이 coupon-api 장애에 오래 묶이지 않게.
+ * <p>
+ * 인증은 Caller 별로 다르게 싣는다 (mcp-server 는 토큰을 검증하지 않는다 — 판정은 coupon-api 한 곳):
+ * 사람(User)은 받은 access token 을 그대로 Authorization 에, 서버(Service)는 내부 API + X-Internal-Token.
  */
 @Component
 public class CouponApiClient {
@@ -30,6 +38,7 @@ public class CouponApiClient {
 
     private final RestClient restClient;
     private final McpProperties.Search search;
+    private final String internalToken;
 
     public CouponApiClient(RestClient.Builder builder, McpProperties properties) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
@@ -37,6 +46,44 @@ public class CouponApiClient {
         requestFactory.setReadTimeout(properties.couponApi().readTimeout());
         this.restClient = builder.baseUrl(properties.couponApi().baseUrl()).requestFactory(requestFactory).build();
         this.search = properties.search();
+        this.internalToken = properties.couponApi().internalToken();
+    }
+
+    static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
+    private static final ParameterizedTypeReference<List<MyCoupon>> MY_COUPONS = new ParameterizedTypeReference<>() {
+    };
+
+    /**
+     * 호출한 사용자 본인의 쿠폰. 누구인지는 Caller(HTTP 헤더)로만 정한다.
+     * <ul>
+     *   <li>User → GET /api/users/me/coupons (Bearer 그대로 — 만료·로그아웃이면 coupon-api 가 401)</li>
+     *   <li>Service + userId → GET /internal/users/{userId}/coupons (X-Internal-Token)</li>
+     *   <li>그 외 → UNAUTHENTICATED (coupon-api 를 부르지 않는다)</li>
+     * </ul>
+     */
+    public List<MyCoupon> getMyCoupons(Caller caller) {
+        if (caller instanceof Caller.User user) {
+            return call("내 쿠폰 조회", () -> restClient.get().uri("/api/users/me/coupons")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + user.accessToken()).retrieve().body(MY_COUPONS));
+        }
+        if (caller instanceof Caller.Service service && service.userId() != null) {
+            if (internalToken == null || internalToken.isBlank()) {
+                log.error("서비스 호출의 사용자 쿠폰 조회 실패: app.mcp.coupon-api.internal-token(INTERNAL_API_TOKEN)이 비어 있음");
+                throw new CouponApiException(Kind.UNAVAILABLE, "쿠폰 서비스 내부 연결이 설정되지 않았습니다.");
+            }
+            try {
+                return call("사용자 쿠폰 조회(내부)", () -> restClient.get().uri("/internal/users/{id}/coupons", service.userId())
+                        .header(INTERNAL_TOKEN_HEADER, internalToken).retrieve().body(MY_COUPONS));
+            } catch (CouponApiException e) {
+                if (e.kind() == Kind.UNAUTHENTICATED) {
+                    // 사용자 탓이 아니라 서버 설정(두 서비스의 INTERNAL_API_TOKEN 불일치) 문제
+                    log.error("coupon-api 내부 API 가 X-Internal-Token 을 거절함 — 두 서비스의 INTERNAL_API_TOKEN 이 같은지 확인");
+                    throw new CouponApiException(Kind.UNAVAILABLE, "쿠폰 서비스 내부 연결에 실패했습니다.", e);
+                }
+                throw e;
+            }
+        }
+        throw new CouponApiException(Kind.UNAUTHENTICATED, "로그인한 사용자만 쓸 수 있습니다.");
     }
 
     public CouponEvent getEvent(long eventId) {
@@ -48,8 +95,16 @@ public class CouponApiClient {
      * — 도구 호출은 결과 하나를 기대하므로 폴링을 모델에게 떠넘기지 않는다.
      * coupon-api 는 마감(15초)이 지나면 키워드 검색으로 끝내므로, 보통 대기 한도(20초) 전에 COMPLETED / FALLBACK 이 온다.
      */
-    public SearchResult searchEvents(String query) {
+    public SearchResult searchEvents(String query, Caller caller) {
+        // 로그인한 사람이면 토큰을 함께 보내 검색 한도를 회원별로 센다 (없으면 coupon-api 는 IP 별 — mcp-server 하나가 모두 127.0.0.1).
+        // 공개 경로라 토큰이 만료돼도 401 이 아니라 비로그인으로 처리된다
+        String authorization = caller instanceof Caller.User user ? "Bearer " + user.accessToken() : null;
         SearchResult result = call("이벤트 검색", () -> restClient.post().uri("/api/coupons/search")
+                .headers(headers -> {
+                    if (authorization != null) {
+                        headers.set(HttpHeaders.AUTHORIZATION, authorization);
+                    }
+                })
                 .contentType(MediaType.APPLICATION_JSON).body(Map.of("query", query)).retrieve().body(SearchResult.class));
         long deadline = System.nanoTime() + search.waitTimeout().toNanos();
         while (result != null && result.isPending()) {
@@ -88,6 +143,9 @@ public class CouponApiClient {
             }
             if (status.value() == 400) {
                 throw new CouponApiException(Kind.INVALID_INPUT, message, e);
+            }
+            if (status.value() == 401) {
+                throw new CouponApiException(Kind.UNAUTHENTICATED, message, e);
             }
             log.warn("{} 실패: coupon-api {} {}", action, status.value(), message);
             throw new CouponApiException(Kind.UNAVAILABLE, message, e);

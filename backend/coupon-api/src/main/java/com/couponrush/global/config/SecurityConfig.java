@@ -1,5 +1,7 @@
 package com.couponrush.global.config;
 
+import com.couponrush.auth.internal.InternalApiProperties;
+import com.couponrush.auth.internal.InternalServiceAuthenticationFilter;
 import com.couponrush.auth.jwt.JsonAccessDeniedHandler;
 import com.couponrush.auth.jwt.JsonAuthenticationEntryPoint;
 import com.couponrush.auth.jwt.JwtAuthenticationFilter;
@@ -24,6 +26,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
  *    refresh/logout 의 쿠키는 SameSite=Strict 로 CSRF 를 막는다)
  * - 로그인 진입: GET /oauth2/authorization/{kakao|naver|google}
  * - 보호된 API: Authorization: Bearer {access token} → JwtAuthenticationFilter 가 검증
+ * - 서비스 간 내부 API(/internal/**): X-Internal-Token → InternalServiceAuthenticationFilter (사용자 JWT 로는 403)
  */
 @Configuration
 public class SecurityConfig {
@@ -35,6 +38,7 @@ public class SecurityConfig {
     private final JwtTokenProvider jwtTokenProvider;
     private final AccessTokenBlacklist accessTokenBlacklist;
     private final JsonAccessDeniedHandler accessDeniedHandler;
+    private final InternalApiProperties internalApiProperties;
 
     public SecurityConfig(CustomOAuth2UserService customOAuth2UserService,
                           OAuth2LoginSuccessHandler successHandler,
@@ -42,7 +46,8 @@ public class SecurityConfig {
                           JsonAuthenticationEntryPoint authenticationEntryPoint,
                           JwtTokenProvider jwtTokenProvider,
                           AccessTokenBlacklist accessTokenBlacklist,
-                          JsonAccessDeniedHandler accessDeniedHandler) {
+                          JsonAccessDeniedHandler accessDeniedHandler,
+                          InternalApiProperties internalApiProperties) {
         this.customOAuth2UserService = customOAuth2UserService;
         this.successHandler = successHandler;
         this.failureHandler = failureHandler;
@@ -50,6 +55,7 @@ public class SecurityConfig {
         this.jwtTokenProvider = jwtTokenProvider;
         this.accessTokenBlacklist = accessTokenBlacklist;
         this.accessDeniedHandler = accessDeniedHandler;
+        this.internalApiProperties = internalApiProperties;
     }
 
     @Bean
@@ -69,6 +75,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/coupons/search").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/coupons/search/*").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        // 서비스 간 호출 전용. 사용자(USER/ADMIN)는 들어올 수 없다 — 경로로 받은 사용자 ID 를 그대로 믿는 API 라서
+                        .requestMatchers("/internal/**").hasRole(InternalServiceAuthenticationFilter.ROLE)
                         .anyRequest().authenticated())
                 .oauth2Login(oauth2 -> oauth2
                         .userInfoEndpoint(userInfo -> userInfo.userService(customOAuth2UserService))
@@ -76,6 +84,7 @@ public class SecurityConfig {
                         .failureHandler(failureHandler))
                 .addFilterBefore(new JwtAuthenticationFilter(jwtTokenProvider, accessTokenBlacklist),
                         UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new InternalServiceAuthenticationFilter(internalApiProperties), JwtAuthenticationFilter.class)
                 // API 서버이므로 미인증 요청은 로그인 페이지 리다이렉트(302)가 아니라 401 JSON 으로 응답
                 .exceptionHandling(e -> e
                         .authenticationEntryPoint(authenticationEntryPoint)

@@ -11,6 +11,8 @@ public class CouponApiException extends RuntimeException {
         NOT_FOUND,
         /** 입력이 잘못됨 (400) — 모델이 인자를 고쳐 다시 부를 수 있다 */
         INVALID_INPUT,
+        /** 로그인이 필요하거나 토큰이 만료·무효 (401) — 사용자에게 다시 로그인해 토큰을 넣어 달라고 안내 */
+        UNAUTHENTICATED,
         /** coupon-api 장애·응답 없음·검색 지연 — 잠시 후 다시 */
         UNAVAILABLE
     }
