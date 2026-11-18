@@ -135,6 +135,14 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
     - [ ] C2) llm-service ChatOrchestrator: tool use 루프(MCP 클라이언트), 도구 호출 최대 5회·턴당 토큰 상한·마감, 기존 예산·레이트 리밋 재사용
     - [ ] C3) fake 제공자 시나리오(도구 호출 → 결과 → 답변, 발급 요청 거절) 테스트
     - [ ] C4) 프론트 채팅 위젯 (폴링, SSE는 나중)
+  - [ ] D. WebSocket 이벤트 채팅방 (사람 ↔ 사람) — 목적: WebSocket 경험(연결·STOMP·연결 인증·scale-out). 계획 2026-11-18,
+        B2·B3를 끝낸 뒤 시작. 설계는 아래 "WebSocket 채팅 계획" 메모. 챗봇(C)과는 별개 기능 (챗봇 답변 푸시는 SSE가 더 맞음)
+    - [ ] D1) chat-service 모듈(8083): Spring WebSocket + STOMP, 이벤트별 방 /topic/events/{id}, 메시지 500자·사용자별 도배 제한 (1대 기준)
+    - [ ] D2) 인증: coupon-api POST /api/chat/tickets(로그인) → 30초 1회용 티켓(Redis) → chat-service가 STOMP CONNECT에서 확인 후 삭제.
+          보낸 사람·닉네임은 서버가 정함(사칭 불가). 재사용·만료 티켓 거절
+    - [ ] D3) scale-out: Redis pub/sub으로 인스턴스 간 전달 — chat-service 2대 테스트(A 접속자 메시지가 B 접속자에게)
+    - [ ] D4) 프론트: 이벤트 상세 화면 채팅 패널(@stomp/stompjs, 자동 재연결), Vite 프록시 ws: true. 브라우저 창 2개로 수동 확인
+    - [ ] D5) (선택) 최근 메시지 50개 Redis 보관(입장 시 표시), 남은 수량 실시간 푸시(상세 3초 폴링 대체)
 
 ## 결정 사항 / 메모
 
@@ -738,6 +746,20 @@ MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Sessio
 - 벡터 검색(pgvector 임베딩)은 보류: Anthropic에 임베딩 API가 없어 별도 제공자(Voyage 등)나 로컬 모델이 필요하고,
   이벤트 수가 적은 지금은 필터 추출로 충분. 의미 검색("커피 할인" → "아메리카노 쿠폰")이 필요해지면
   필터로 좁히고 벡터 유사도로 정렬하는 하이브리드로 추가.
+
+### WebSocket 채팅 계획 (D, 2026-11-18 수립 — 미구현)
+```
+[브라우저] ① POST /api/chat/tickets (로그인) ─▶ coupon-api: 1회용 티켓(30초) Redis 저장
+           ② ws /ws/chat + STOMP CONNECT(ticket) ─▶ chat-service: 티켓 확인·삭제 → 사용자 확정
+           ③ SUBSCRIBE /topic/events/{id}, SEND /app/events/{id}/chat
+                chat-service ─ Redis pub/sub ─ chat-service(다른 인스턴스)
+```
+- **별도 서비스(chat-service)**: WebSocket은 연결을 오래 쥔다 → 선착순 오픈 순간 coupon-api의 스레드·메모리를 쓰지 않게 분리 (llm-service·mcp-server와 같은 원칙).
+- **티켓 인증**: 브라우저 WebSocket은 Authorization 헤더를 못 붙이고, URL에 토큰을 싣지 않는 규칙 → 짧은 1회용 티켓을 첫 STOMP 프레임으로.
+  티켓은 coupon-api가 발급하므로 chat-service는 JWT 비밀키를 모른다 (비밀값을 여러 서비스에 나누지 않음).
+- **브로커**: 서버 안은 STOMP 단순 브로커, 서버 간은 Redis pub/sub을 직접 연결 — RabbitMQ 릴레이를 쓰면 scale-out 문제가 숨겨지므로 학습 목적상 직접 다룬다.
+- 보호: 메시지 크기 상한, 사용자별 도배 제한, 느린 클라이언트(전송 버퍼·시간 제한), 보낸 사람은 서버가 채움. 발급 기능과 무관(조회·대화만).
+- 챗봇(C)과 구분: 챗봇은 서버 → 브라우저 한 방향 푸시라 SSE가 더 단순하다. WebSocket은 사람끼리 양방향 대화에 쓴다.
 
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)
