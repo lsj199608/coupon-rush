@@ -9,4 +9,6 @@ export const queryKeys = {
   eventSearchRequest: (requestId: string) => ['event-search', 'request', requestId] as const,
   stockCheck: (couponId: number) => ['admin', 'stock-check', couponId] as const,
   llmRequest: (requestId: string) => ['admin', 'llm-requests', requestId] as const,
+  chatSessions: ['chat', 'sessions'] as const,
+  chatSession: (sessionId: number) => ['chat', 'sessions', sessionId] as const,
 };

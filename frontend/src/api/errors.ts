@@ -30,6 +30,14 @@ const MESSAGES: Record<string, string> = {
   LLM_REQUEST_NOT_FOUND: '문구 생성 결과를 찾을 수 없어요. 다시 생성해 주세요.',
   // 자연어 검색 (한도·예산·장애는 에러가 아니라 키워드 검색 결과로 온다 — SEARCH_FALLBACK_MESSAGES)
   EVENT_SEARCH_NOT_FOUND: '검색 결과를 찾을 수 없어요. 다시 검색해 주세요.',
+  // 챗봇 (질문 접수 단계에서 바로 거절)
+  CHAT_SESSION_NOT_FOUND: '대화를 찾을 수 없어요. 새 대화를 시작해 주세요.',
+  CHAT_TURN_NOT_FOUND: '대화를 찾을 수 없어요. 새 대화를 시작해 주세요.',
+  CHAT_TURN_IN_PROGRESS: '앞 질문의 답을 기다리는 중이에요. 답이 온 뒤에 보내 주세요.',
+  CHAT_RATE_LIMITED: '질문은 1분에 5번까지예요. 잠시 후 다시 보내 주세요.',
+  CHAT_DAILY_LIMIT_EXCEEDED: '오늘 질문 횟수(50번)를 모두 썼어요. 내일 다시 이용해 주세요.',
+  CHAT_BUDGET_EXCEEDED: '오늘 AI 사용량을 모두 써서 지금은 답할 수 없어요. 내일 다시 이용해 주세요.',
+  CHAT_UNAVAILABLE: '질문을 보내지 못했어요. 잠시 후 다시 보내 주세요.',
 };
 
 /** 키워드 검색으로 대신한 이유(FALLBACK.fallbackReason, 백엔드 SearchFallbackReason) → 안내 */
@@ -48,6 +56,16 @@ const LLM_FAILURE_MESSAGES: Record<string, string> = {
   CONTENT_REFUSED: '이 내용으로는 문구를 만들 수 없어요. 키워드를 바꿔 주세요.',
   TIMEOUT: '문구 생성이 너무 오래 걸려 중단했어요. 다시 시도해 주세요.',
   PUBLISH_FAILED: MESSAGES.LLM_REQUEST_UNAVAILABLE,
+};
+
+/** 챗봇 답 실패 사유(FAILED.failureReason, 백엔드 LlmFailureReason) → 말풍선 안내 */
+const CHAT_FAILURE_MESSAGES: Record<string, string> = {
+  LLM_UNAVAILABLE: '지금은 답을 만들 수 없어요. 잠시 후 다시 보내 주세요.',
+  BUDGET_EXCEEDED: MESSAGES.CHAT_BUDGET_EXCEEDED,
+  INVALID_OUTPUT: '답을 제대로 만들지 못했어요. 다시 보내 주세요.',
+  CONTENT_REFUSED: '이 질문에는 답할 수 없어요. 다르게 물어봐 주세요.',
+  TIMEOUT: '답이 너무 오래 걸려 멈췄어요. 다시 보내 주세요.',
+  PUBLISH_FAILED: MESSAGES.CHAT_UNAVAILABLE,
 };
 
 /** 컨슈머가 DB 저장에 실패한 사유(FAILED.failureReason) → 메시지 */
@@ -97,6 +115,10 @@ export function failureReasonMessage(reason: string | undefined): string {
 
 export function llmFailureMessage(reason: string | null | undefined): string {
   return (reason && LLM_FAILURE_MESSAGES[reason]) || GENERIC;
+}
+
+export function chatFailureMessage(reason: string | null | undefined): string {
+  return (reason && CHAT_FAILURE_MESSAGES[reason]) || GENERIC;
 }
 
 export function searchFallbackMessage(reason: string | null | undefined): string {

@@ -147,7 +147,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
     - [x] C3) 실제 연결 확인 2026-11-19 (docs/manual-check.md I1~I7, fake): bootRun 3개 + API로 내 쿠폰·검색(AI 경로)·상세·발급 거절·
           다른 회원 사칭 무시·회원별 검색 한도·mcp-server 중단 시 즉시 LLM_UNAVAILABLE(다른 API 정상). 답 0.8~2.3초.
           주의: PowerShell 5.1 스크립트는 BOM 있는 UTF-8로 저장해야 한글 리터럴이 안 깨진다 (확인 중 이벤트 이름이 깨져 검색 0건이 나왔음 — 앱 문제 아님)
-    - [ ] C4) 프론트 채팅 위젯 (폴링, SSE는 나중)
+    - [x] C4) 프론트 챗봇 창 — 아래 "프론트엔드"의 "챗봇 창" 메모. 헤더 [AI 챗봇](로그인 시) → 오른쪽 아래 창(모바일 전체 화면),
+          대화방 조회를 마지막 턴이 PENDING일 때만 1초 폴링, 답 속 주소는 링크(같은 사이트면 화면 이동), 실패 사유·[다시 보내기], [새 대화].
+          테스트 ChatPanel.test.tsx(9). 브라우저 수동 확인은 아직
   - [ ] D. WebSocket 이벤트 채팅방 (사람 ↔ 사람) — 목적: WebSocket 경험(연결·STOMP·연결 인증·scale-out). 계획 2026-11-18,
         B2·B3를 끝낸 뒤 시작. 설계는 아래 "WebSocket 채팅 계획" 메모. 챗봇(C)과는 별개 기능 (챗봇 답변 푸시는 SSE가 더 맞음)
     - [ ] D1) chat-service 모듈(8083): Spring WebSocket + STOMP, 이벤트별 방 /topic/events/{id}, 메시지 500자·사용자별 도배 제한 (1대 기준)
@@ -416,9 +418,9 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 
 | 폴더 | 내용 |
 |---|---|
-| api/ | axios 호출·응답 타입(coupons, admin, auth, llm, search), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
-| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents, useEventCopy(문구 생성 상태 머신), useEventSearch(자연어 검색) |
-| components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary, EventCopyPanel(AI 문구 추천) |
+| api/ | axios 호출·응답 타입(coupons, admin, auth, llm, search, chat), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
+| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents, useEventCopy(문구 생성 상태 머신), useEventSearch(자연어 검색), useChat(챗봇) |
+| components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary, EventCopyPanel(AI 문구 추천), ChatPanel(챗봇 창) |
 | pages/ | EventList, EventDetail, MyCoupons, AdminEventCreate, Login, OAuthCallback, NotFound |
 | auth/ | AuthContext(세션 상태), ProtectedRoute(로그인 필요), AdminRoute(ADMIN 필요) |
 | utils/ | format(날짜·카운트다운), eventForm(관리자 폼 검증·변환) |
@@ -512,6 +514,25 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 - 결과 카드는 목록과 같은 EventList. 모바일은 입력칸 한 줄 + 버튼 아래 줄.
 - 테스트: pages/EventSearch.test.tsx(조건 표시·폴링·접수 FALLBACK·폴링 TIMEOUT·결과 없음/전체 보기·빈 조건·에러 재시도·화면 타임아웃·빈 검색),
   utils/searchFilter.test.ts(날짜는 PC 시간대 0시로 만들어 시간대와 무관).
+
+#### 챗봇 창 (7단계 C4, components/ChatPanel + hooks/useChat + api/chat)
+```
+헤더 [AI 챗봇] (로그인 시만) → ChatPanel (App 이 user.id 를 key 로 렌더 — 회원이 바뀌면 상태 초기화)
+  대화방 고르기: sessionStorage coupon-rush:chat-session:{회원 ID} → 없으면 GET /api/chat/sessions 의 최근 방 → 없으면 첫 질문 때 POST 로 만듦
+               저장한 방이 404(CHAT_SESSION_NOT_FOUND)면 잊고 최근 방을 다시 고른다
+  질문: POST .../turns (202) → 대화방 GET 다시 → 마지막 턴이 PENDING 이고 마감 + 15초 전이면 1초마다 GET (그 밖엔 폴링 없음)
+```
+- 대화 내용은 Query(['chat','sessions',id])에만, 화면 state는 "보는 방 ID"와 "[새 대화] 눌림"뿐. 화면이 따로 타임아웃을 판단하지 않는다 —
+  서버가 마감(60초) 뒤 조회 때 TIMEOUT으로 끝내므로 그 응답을 그린다 (마감 + 15초는 서버가 응답하지 않을 때의 안전장치).
+- 답 기다리는 중에는 보내기·[새 대화]·[다시 보내기]를 막는다(서버도 409 CHAT_TURN_IN_PROGRESS). 연타는 inFlight ref로 렌더 전에 막는다.
+- **답 속 주소 → 링크(linkify)**: HTML로 넣지 않고 글자 조각 + `<Link>`/`<a>` 요소로만 만든다(dangerouslySetInnerHTML 금지 — 답에 무엇이 와도 스크립트가 안 됨).
+  같은 사이트(origin) 주소는 `<Link>`로 화면 이동 후 창을 닫고, 바깥 주소는 새 탭 + noopener.
+- 메시지: api/errors.ts의 CHAT_* (접수 거절)와 chatFailureMessage(FAILED 사유). Enter = 보내기, Shift+Enter = 줄바꿈, 한글 조합 중 Enter 무시, Esc = 닫기.
+- 플로팅 버튼이 아니라 헤더 버튼: 모바일 상세의 sticky [발급 받기]를 가리지 않게. 모바일(600px 이하)은 창이 전체 화면.
+- 테스트(ChatPanel.test.tsx): 비로그인 버튼 없음, 첫 질문(방 생성 → PENDING 동안 보내기 막힘 → 답·내부 링크), 최근 방 이어 보기, 저장한 방 404 → 최근 방,
+  실패 사유·다시 보내기(retryable만), 접수 거절 메시지, 새 대화, 닫기/Esc, linkify가 HTML을 글자로 둠.
+- 테스트 메모: EventPages "중복 클릭" 테스트의 `expect(button).toBeDisabled()`가 클릭 직후 동기 검사라 App이 useAuth를 읽게 되자 깨졌다 —
+  버튼 모양은 다음 렌더에서 바뀌므로 waitFor로, 중복 요청 방지는 requestIssue 1회 호출로 검증한다.
 
 #### 발급 폴링 구조 (hooks/useIssueCoupon)
 ```

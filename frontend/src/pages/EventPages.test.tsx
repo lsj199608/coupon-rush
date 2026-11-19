@@ -163,7 +163,8 @@ describe('이벤트 상세와 발급', () => {
     fireEvent.click(button);   // 렌더링 전에 연달아 눌러도
     fireEvent.click(button);
 
-    expect(button).toBeDisabled();
+    // 중복 요청은 클릭 즉시 잠금(inFlight)이 막는다 — 아래 requestIssue 1회로 확인. 버튼 모양은 다음 렌더에서 꺼진다
+    await waitFor(() => expect(button).toBeDisabled());
     expect(await screen.findByText(/발급을 처리하고 있어요/)).toBeInTheDocument();
     expect(await screen.findByText('쿠폰이 발급되었어요! 🎉')).toBeInTheDocument();
     expect(couponsApi.requestIssue).toHaveBeenCalledTimes(1);
