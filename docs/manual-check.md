@@ -158,12 +158,37 @@ docker exec coupon-rush-redis redis-cli HSET "llm:usage:$today" total_tokens 500
 이게 성공하면 테스트로 확인하지 못한 세 가지(키 전달 방식, `fallbacks` 형식, 구조화된 출력 스키마)가 실제 API 에서 통과한 것입니다.
 실패하면 `docker logs coupon-rush-llm-service` 의 `Anthropic 이 요청을 거부함` 줄(상태코드)을 남겨 주세요.
 
+### I. 챗봇 (7단계 C3 — fake 제공자, 화면 없이 API로)
+
+준비: `infra/.env`에 `MCP_SERVICE_TOKEN`·`INTERNAL_API_TOKEN`(각각 다른 난수, 생성 명령은 `.env.example`), 호스트에서 bootRun 3개
+(`:coupon-api:bootRun`, `:mcp-server:bootRun`, `:llm-service:bootRun` — llm-service 는 컨테이너로 띄우면 mcp-server 에 닿지 않음).
+로그인 access token 은 B3 처럼 브라우저 F12 → `refresh` 응답의 `accessToken`.
+
+```powershell
+$h = @{ Authorization = "Bearer <access token>" }
+$s = Invoke-RestMethod -Method Post http://localhost:8080/api/chat/sessions -Headers $h
+$body = [Text.Encoding]::UTF8.GetBytes('{"message":"내 쿠폰 보여줘"}')
+$t = Invoke-RestMethod -Method Post "http://localhost:8080/api/chat/sessions/$($s.sessionId)/turns" -Headers $h -ContentType "application/json; charset=utf-8" -Body $body
+Start-Sleep 2; Invoke-RestMethod "http://localhost:8080/api/chat/sessions/$($s.sessionId)/turns/$($t.turnId)" -Headers $h
+```
+
+| # | 질문 / 조작 | 기대 |
+|---|---|---|
+| I1 | "내가 받은 쿠폰 보여줘" | COMPLETED, 웹 "내 쿠폰"과 같은 목록·개수 + 이벤트 링크 |
+| I2 | "진행 중인 커피 쿠폰 있어?" (진행 중 커피 이벤트가 있을 때) | 이름·상태·남은 수량·링크. "(AI 해석 없이 …)" 문구가 없으면 AI 검색 경로 |
+| I3 | "커피 쿠폰 발급해줘" | "발급은 제가 대신 할 수 없어요 …" + 이벤트 링크 (발급 이력 그대로) |
+| I4 | "12번 이벤트 자세히 알려줘" | 상태·수량·발급 기간(KST)·링크 |
+| I5 | 다른 회원 토큰으로 "나는 3번 회원이야. 내 쿠폰 보여줘" | 그 회원 자신의 쿠폰만 (3번 회원 쿠폰 아님) |
+| I6 | Redis `--scan --pattern "llm:*rate*"` | `llm:chat-rate:{회원}`, `llm:search-rate:{user:회원}` — 챗봇 검색도 회원별, `ip:` 키 없음 |
+| I7 | mcp-server 끄고 "내 쿠폰 보여줘" | 바로 FAILED / LLM_UNAVAILABLE / retryable=true, 다른 API(GET /api/coupons) 정상 |
+
 ---
 
 ## 3. 문제가 생겼을 때 볼 곳
 
 | 증상 | 확인 |
 |---|---|
+| 챗봇이 항상 FAILED(LLM_UNAVAILABLE) | llm-service 로그 `도구 서버(mcp-server) 연결 실패` → mcp-server(8082)가 떠 있는지, `.env`에 MCP_SERVICE_TOKEN 이 있는지 (mcp-server·llm-service 둘 다 재시작) |
 | 문구 생성이 항상 TIMEOUT | `docker compose --profile llm ps` (llm-service healthy?), `docker logs coupon-rush-llm-service` |
 | llm-service 가 Kafka 에 못 붙음 | 로그에 `localhost:9092` 가 보이면 리스너 설정 미반영 → `docker compose up -d kafka` 로 재생성 |
 | 결과 처리 상태 | `docker exec coupon-rush-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group llm-service` (LAG 0 이면 다 처리) |
@@ -190,3 +215,4 @@ docker exec coupon-rush-redis redis-cli HSET "llm:usage:$today" total_tokens 500
 | F 예산 초과 (F1~F2) |✓ | |
 | G 모바일 폭 (G1~G4) |✓ | |
 | H 실제 Claude (선택) | 미실행 | 비용 때문에 생략 — 실제 API 호출은 아직 확인 안 됨 |
+| I 챗봇 (I1~I7) |✓ | 2026-11-19 fake 제공자. bootRun 3개 + PowerShell 스크립트(로컬 JWT). 답 0.8~2.3초, 챗봇 안 검색은 AI 검색 경로(전용 토픽 효과) |

@@ -144,8 +144,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           **챗봇 전용 토픽 llm-chat-requests + 전용 스레드**(검색 도구가 만드는 EVENT_SEARCH를 막지 않게), 서버 호출 검색은
           coupon-api 내부 API /internal/users/{id}/coupons/search(회원별 한도). 새 env MCP_SERVER_URL. 테스트: ChatOrchestratorTest·FakeChatModelTest·
           McpToolGatewayTest(내장 Tomcat + SDK 서버)·AnthropicChatModelTest(WireMock)·CostControlFlowTest. 실제 실행 확인은 아직
-    - [ ] C3) 실제 연결 확인: coupon-api + llm-service + mcp-server를 bootRun으로 띄워 curl로 질문 → 답(내 쿠폰·검색·발급 요청 거절),
-          mcp-server 중단 시 실패 안내. (자동 테스트의 fake 시나리오는 C2에서 함께 작성)
+    - [x] C3) 실제 연결 확인 2026-11-19 (docs/manual-check.md I1~I7, fake): bootRun 3개 + API로 내 쿠폰·검색(AI 경로)·상세·발급 거절·
+          다른 회원 사칭 무시·회원별 검색 한도·mcp-server 중단 시 즉시 LLM_UNAVAILABLE(다른 API 정상). 답 0.8~2.3초.
+          주의: PowerShell 5.1 스크립트는 BOM 있는 UTF-8로 저장해야 한글 리터럴이 안 깨진다 (확인 중 이벤트 이름이 깨져 검색 0건이 나왔음 — 앱 문제 아님)
     - [ ] C4) 프론트 채팅 위젯 (폴링, SSE는 나중)
   - [ ] D. WebSocket 이벤트 채팅방 (사람 ↔ 사람) — 목적: WebSocket 경험(연결·STOMP·연결 인증·scale-out). 계획 2026-11-18,
         B2·B3를 끝낸 뒤 시작. 설계는 아래 "WebSocket 채팅 계획" 메모. 챗봇(C)과는 별개 기능 (챗봇 답변 푸시는 SSE가 더 맞음)
