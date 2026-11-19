@@ -12,7 +12,11 @@ import com.couponrush.llm.contract.LlmResultStatus;
 import com.couponrush.llm.contract.LlmTopics;
 import com.couponrush.llm.contract.LlmUsageKeys;
 import com.couponrush.llmservice.TestcontainersConfiguration;
-import com.couponrush.llmservice.chat.PlaceholderChatResponder;
+import com.couponrush.llmservice.chat.ChatOrchestrator;
+import com.couponrush.llmservice.chat.tool.ToolGateway;
+import com.couponrush.llmservice.chat.tool.ToolOutcome;
+import com.couponrush.llmservice.chat.tool.ToolSession;
+import com.couponrush.llmservice.chat.tool.ToolSpec;
 import com.couponrush.llmservice.client.FakeLlmClient;
 import com.couponrush.llmservice.client.LlmCallException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -56,7 +60,9 @@ class CostControlFlowTest {
     @Autowired ObjectMapper objectMapper;
     @Autowired StringRedisTemplate redisTemplate;
     @MockitoSpyBean FakeLlmClient llmClient;
-    @MockitoSpyBean PlaceholderChatResponder chatResponder;
+    @MockitoSpyBean ChatOrchestrator chatResponder;
+    /** mcp-server 대신 — 검색 결과 하나를 돌려주는 도구 */
+    @org.springframework.test.context.bean.override.mockito.MockitoBean ToolGateway toolGateway;
 
     Consumer<String, String> results;
 
@@ -79,7 +85,8 @@ class CostControlFlowTest {
     }
 
     private LlmResultMessage process(LlmRequestMessage request) throws Exception {
-        kafkaTemplate.send(LlmTopics.REQUESTS, request.requestId().toString(), objectMapper.writeValueAsString(request)).get();
+        kafkaTemplate.send(LlmTopics.requestTopicOf(request.type()), request.requestId().toString(),
+                objectMapper.writeValueAsString(request)).get();
         return await().atMost(WAIT).until(() -> {
             for (ConsumerRecord<String, String> r : KafkaTestUtils.getRecords(results, Duration.ofMillis(300))) {
                 if (request.requestId().toString().equals(r.key())) {
@@ -233,18 +240,54 @@ class CostControlFlowTest {
                 new ChatInput(message, List.of(new ChatTurn("이전 질문", "이전 답"))));
     }
 
+    private void stubTools() {
+        org.mockito.Mockito.when(toolGateway.open(org.mockito.ArgumentMatchers.anyLong())).thenAnswer(invocation -> new ToolSession() {
+            @Override
+            public List<ToolSpec> tools() {
+                return List.of(new ToolSpec("get_my_coupons", "내 쿠폰", Map.of("type", "object")),
+                        new ToolSpec("search_events", "검색", Map.of("type", "object")));
+            }
+
+            @Override
+            public ToolOutcome call(com.couponrush.llmservice.chat.tool.ToolCall call) {
+                return new ToolOutcome(call.id(), """
+                        {"count":1,"coupons":[{"issueId":1,"eventId":3,"eventName":"커피 50%","issuedAt":"2030-01-01 10:01 KST",
+                         "url":"http://localhost:5173/events/3"}]}""", false);
+            }
+
+            @Override
+            public void close() {
+            }
+        });
+    }
+
     @Test
-    void 챗봇_질문은_답변_결과로_돌아오고_같은_문장이어도_캐시하지_않는다() throws Exception {
+    void 챗봇_질문은_챗봇_토픽에서_도구를_거쳐_답이_되고_같은_문장이어도_캐시하지_않는다() throws Exception {
+        stubTools();
         LlmResultMessage first = process(chat("내 쿠폰 보여줘"));
         LlmResultMessage second = process(chat("내 쿠폰 보여줘"));
 
         assertThat(first.status()).isEqualTo(LlmResultStatus.COMPLETED);
-        assertThat(first.chatReply().text()).contains("내 쿠폰 보여줘").contains("이전 대화 1개");
+        assertThat(first.chatReply().text()).contains("받은 쿠폰은 1개").contains("커피 50%");
+        assertThat(first.model()).isEqualTo("fake");
+        assertThat(first.totalTokens()).as("모델 호출 2번(도구 요청 + 답)의 합").isPositive();
+        verify(toolGateway, times(2)).open(7L);
         assertThat(first.candidates()).isEmpty();
         assertThat(first.searchFilter()).isNull();
         assertThat(second.cached()).as("답이 사람·시점마다 다른 조회에 기대므로 캐시하지 않는다").isFalse();
-        verify(chatResponder, times(2)).answer(org.mockito.ArgumentMatchers.eq(7L), any());
+        verify(chatResponder, times(2)).answer(org.mockito.ArgumentMatchers.eq(7L), any(), any(), any());
         assertThat(redisTemplate.keys("llm:cache:*")).as("캐시에 쓰지도 않는다").isEmpty();
+    }
+
+    @Test
+    void 도구_서버에_연결하지_못하면_FAILED_LLM_UNAVAILABLE() throws Exception {
+        org.mockito.Mockito.when(toolGateway.open(org.mockito.ArgumentMatchers.anyLong()))
+                .thenThrow(new LlmCallException(LlmFailureReason.LLM_UNAVAILABLE, "연결 실패"));
+
+        LlmResultMessage result = process(chat("커피"));
+
+        assertThat(result.status()).isEqualTo(LlmResultStatus.FAILED);
+        assertThat(result.failureReason()).isEqualTo(LlmFailureReason.LLM_UNAVAILABLE);
     }
 
     @Test
@@ -254,6 +297,6 @@ class CostControlFlowTest {
         LlmResultMessage result = process(chat("예산 소진"));
 
         assertThat(result.failureReason()).isEqualTo(LlmFailureReason.BUDGET_EXCEEDED);
-        verify(chatResponder, never()).answer(org.mockito.ArgumentMatchers.anyLong(), any());
+        verify(chatResponder, never()).answer(org.mockito.ArgumentMatchers.anyLong(), any(), any(), any());
     }
 }

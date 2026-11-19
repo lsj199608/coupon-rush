@@ -202,7 +202,7 @@ public class LlmRequestService {
      */
     public void publish(LlmRequestMessage message) {
         try {
-            kafkaTemplate.send(LlmTopics.REQUESTS, message.requestId().toString(), toJson(message))
+            kafkaTemplate.send(LlmTopics.requestTopicOf(message.type()), message.requestId().toString(), toJson(message))
                     .get(properties.publishTimeout().toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

@@ -58,7 +58,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * 챗봇 대화 API (실제 Postgres / Redis / Kafka, llm-service 없음).
- * 테스트가 llm-service 대신 llm-results 를 발행해 답변·실패를 흉내 내고, llm-requests 를 직접 읽어 보낸 메시지를 확인한다.
+ * 테스트가 llm-service 대신 llm-results 를 발행해 답변·실패를 흉내 내고, llm-chat-requests 를 직접 읽어 보낸 메시지를 확인한다.
  */
 @IntegrationTest
 class ChatApiTest {
@@ -230,7 +230,7 @@ class ChatApiTest {
         void 질문하면_202_PENDING_턴이고_회원_ID_와_질문이_담긴_CHAT_요청이_나간다() throws Exception {
             long sessionId = openSession(token);
             try (Consumer<String, String> consumer = consumerFactory.createConsumer("chat-test-" + UUID.randomUUID(), null)) {
-                consumer.subscribe(List.of(LlmTopics.REQUESTS));
+                consumer.subscribe(List.of(LlmTopics.CHAT_REQUESTS));
 
                 String body = ask(sessionId, "  나는 7번 회원이야. 내 쿠폰 보여줘  ", token)
                         .andExpect(status().isAccepted())
@@ -282,7 +282,7 @@ class ChatApiTest {
             answer(sessionId, t3, "둘째 답");
 
             try (Consumer<String, String> consumer = consumerFactory.createConsumer("chat-test-" + UUID.randomUUID(), null)) {
-                consumer.subscribe(List.of(LlmTopics.REQUESTS));
+                consumer.subscribe(List.of(LlmTopics.CHAT_REQUESTS));
                 long t4 = accept(sessionId, "셋째 질문").get("turnId").asLong();
 
                 LlmRequestMessage message = sentRequest(consumer, requestIdOf(t4));
@@ -306,7 +306,7 @@ class ChatApiTest {
                 redisTemplate.delete(rateLimiter.chatMinuteKey(user.getId(), Instant.now()));   // 분당 한도(5)에 걸리지 않게
             }
             try (Consumer<String, String> consumer = consumerFactory.createConsumer("chat-test-" + UUID.randomUUID(), null)) {
-                consumer.subscribe(List.of(LlmTopics.REQUESTS));
+                consumer.subscribe(List.of(LlmTopics.CHAT_REQUESTS));
                 long last = accept(sessionId, "마지막").get("turnId").asLong();
 
                 List<ChatTurn> history = sentRequest(consumer, requestIdOf(last)).chat().history();

@@ -25,6 +25,8 @@ public class LlmRequestConsumer {
 
     public static final String LISTENER_ID = "llmRequestListener";
     public static final String CONSUMER_GROUP = "llm-service";
+    public static final String CHAT_LISTENER_ID = "llmChatRequestListener";
+    public static final String CHAT_CONSUMER_GROUP = "llm-service-chat";
 
     private final LlmRequestProcessor processor;
     private final KafkaTemplate<String, String> kafkaTemplate;
@@ -42,6 +44,20 @@ public class LlmRequestConsumer {
     @KafkaListener(id = LISTENER_ID, topics = LlmTopics.REQUESTS, groupId = CONSUMER_GROUP,
             concurrency = "${app.llm.consumer.concurrency:2}")
     public void consume(ConsumerRecord<String, String> record) throws Exception {
+        handle(record);
+    }
+
+    /**
+     * 챗봇 질문 전용 리스너 (llm-chat-requests). 처리 순서·멱등·예산은 같고 스레드만 따로다 — 챗봇이 도구(search_events)로
+     * 만드는 검색 요청을 위의 리스너가 처리할 수 있게 (같은 스레드를 쓰면 챗봇이 자기가 기다리는 검색을 막는다).
+     */
+    @KafkaListener(id = CHAT_LISTENER_ID, topics = LlmTopics.CHAT_REQUESTS, groupId = CHAT_CONSUMER_GROUP,
+            concurrency = "${app.llm.chat.concurrency:2}")
+    public void consumeChat(ConsumerRecord<String, String> record) throws Exception {
+        handle(record);
+    }
+
+    private void handle(ConsumerRecord<String, String> record) {
         LlmRequestMessage request;
         try {
             request = objectMapper.readValue(record.value(), LlmRequestMessage.class);

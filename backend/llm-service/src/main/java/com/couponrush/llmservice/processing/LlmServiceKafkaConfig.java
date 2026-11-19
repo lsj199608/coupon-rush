@@ -49,9 +49,23 @@ public class LlmServiceKafkaConfig {
     }
 
     @Bean
+    public NewTopic llmChatRequestsTopic(@Value("${app.kafka.topic.partitions:3}") int partitions,
+                                         @Value("${app.kafka.replicas:1}") int replicas) {
+        return TopicBuilder.name(LlmTopics.CHAT_REQUESTS).partitions(partitions).replicas(replicas).build();
+    }
+
+    @Bean
+    public NewTopic llmChatRequestsDltTopic(@Value("${app.kafka.topic.partitions:3}") int partitions,
+                                            @Value("${app.kafka.replicas:1}") int replicas) {
+        return TopicBuilder.name(LlmTopics.CHAT_REQUESTS_DLT).partitions(partitions).replicas(replicas).build();
+    }
+
+    /** 두 리스너(llm-requests, llm-chat-requests)가 함께 쓴다 — DLT 는 원래 토픽별로 나눈다 */
+    @Bean
     public CommonErrorHandler llmRequestErrorHandler(KafkaTemplate<String, String> kafkaTemplate) {
         DeadLetterPublishingRecoverer dlt = new DeadLetterPublishingRecoverer(kafkaTemplate,
-                (record, ex) -> new TopicPartition(LlmTopics.REQUESTS_DLT, record.partition()));
+                (record, ex) -> new TopicPartition(LlmTopics.CHAT_REQUESTS.equals(record.topic())
+                        ? LlmTopics.CHAT_REQUESTS_DLT : LlmTopics.REQUESTS_DLT, record.partition()));
         ExponentialBackOffWithMaxRetries backOff = new ExponentialBackOffWithMaxRetries(3);
         backOff.setInitialInterval(1_000L);
         backOff.setMultiplier(2.0);

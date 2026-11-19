@@ -136,10 +136,16 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
     - [ ] B3) 수동 확인: Claude Code에 MCP 서버 연결해 도구 호출
     - [x] C1) 대화 저장 + 질문 API — 아래 "챗봇 대화 (7단계 C1, coupon-api)" 메모. V8 chat_sessions / chat_turns(턴 = 질문 + LLM 요청, 답은 llm_requests에만),
           POST /api/chat/sessions/{id}/turns(202 + 폴링), 방마다 대기 중 질문 1개(409), 한도 분 5·일 50(별도 카운터), 최근 답 받은 10턴을 history로.
-          계약: LlmRequestType.CHAT(회원만), ChatInput / ChatTurn / ChatReply. llm-service는 **임시 고정 답변**(PlaceholderChatResponder, LLM·도구 호출 없음),
+          계약: LlmRequestType.CHAT(회원만), ChatInput / ChatTurn / ChatReply. (C1 당시 llm-service는 임시 고정 답변 → C2에서 실제 챗봇으로 교체)
           챗봇은 캐시하지 않음. 테스트: ChatApiTest(17), 계약·llm-service 챗봇 테스트. 실제 실행 확인은 아직
-    - [ ] C2) llm-service ChatOrchestrator: tool use 루프(MCP 클라이언트), 도구 호출 최대 5회·턴당 토큰 상한·마감, 기존 예산·레이트 리밋 재사용
-    - [ ] C3) fake 제공자 시나리오(도구 호출 → 결과 → 답변, 발급 요청 거절) 테스트
+    - [x] C2) llm-service 챗봇 — 아래 "챗봇 (7단계 C2, llm-service)" 메모. ChatOrchestrator(tool use 루프: 도구 5회·질문당 토큰 20,000·마감 5초 전 중단,
+          넘으면 도구를 끄고 마지막 답 1회), McpToolGateway(공식 MCP SDK 클라이언트, 질문마다 연결, X-Mcp-Service-Token + X-Mcp-User-Id),
+          FakeChatModel(말 규칙 → 도구 1개 → 틀 답, 발급 요청은 검색 + 링크 안내) / AnthropicChatModel(Claude tool use, 응답 그대로 이어 붙임).
+          **챗봇 전용 토픽 llm-chat-requests + 전용 스레드**(검색 도구가 만드는 EVENT_SEARCH를 막지 않게), 서버 호출 검색은
+          coupon-api 내부 API /internal/users/{id}/coupons/search(회원별 한도). 새 env MCP_SERVER_URL. 테스트: ChatOrchestratorTest·FakeChatModelTest·
+          McpToolGatewayTest(내장 Tomcat + SDK 서버)·AnthropicChatModelTest(WireMock)·CostControlFlowTest. 실제 실행 확인은 아직
+    - [ ] C3) 실제 연결 확인: coupon-api + llm-service + mcp-server를 bootRun으로 띄워 curl로 질문 → 답(내 쿠폰·검색·발급 요청 거절),
+          mcp-server 중단 시 실패 안내. (자동 테스트의 fake 시나리오는 C2에서 함께 작성)
     - [ ] C4) 프론트 채팅 위젯 (폴링, SSE는 나중)
   - [ ] D. WebSocket 이벤트 채팅방 (사람 ↔ 사람) — 목적: WebSocket 경험(연결·STOMP·연결 인증·scale-out). 계획 2026-11-18,
         B2·B3를 끝낸 뒤 시작. 설계는 아래 "WebSocket 채팅 계획" 메모. 챗봇(C)과는 별개 기능 (챗봇 답변 푸시는 SSE가 더 맞음)
@@ -552,6 +558,8 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 | `llm-requests` | coupon-api → llm-service | requestId | `LlmRequestMessage(schemaVersion, requestId, type, requestedBy, requestedAt, deadline, regenerate, eventCopy, eventSearch)` |
 | `llm-results` | llm-service → coupon-api | requestId | `LlmResultMessage(schemaVersion, requestId, status, candidates, searchFilter, failureReason, model, inputTokens, outputTokens, cached, latencyMs, completedAt)` |
 | `llm-requests.DLT` | | | 역직렬화 불가 요청만. LLM 실패는 FAILED 결과로 돌려준다 (재시도 = 비용) |
+| `llm-chat-requests` (C2) | coupon-api → llm-service | requestId | `LlmRequestMessage`(type CHAT만). 그룹 llm-service-chat, 전용 스레드 — 아래 "챗봇 (C2)" |
+| `llm-chat-requests.DLT` | | | 챗봇 요청 중 역직렬화 불가 (에러 핸들러가 원래 토픽으로 DLT를 고른다) |
 
 - 진화 규칙: 필드는 **추가만** (모든 레코드 @JsonIgnoreProperties(ignoreUnknown=true) → 먼저 배포된 쪽이 새 필드를 무시).
   이름 변경·삭제·의미 변경은 SCHEMA_VERSION을 올린다. 받는 쪽은 LlmTopics.isSupported(version)가 false면 처리하지 않는다.
@@ -626,10 +634,10 @@ llm-requests ─▶ LlmRequestConsumer (그룹 llm-service, concurrency 2 = 동�
   | 자연어 검색 | FakeEventSearch — 정해진 표현만 인식, 나머지 단어 → keywords | event-search.v1.txt + EventSearchOutput → EventSearchOutputValidator |
   fake 토큰은 글자 수로 흉내(예산 로직 검증용), app.llm.fake.delay로 응답 지연(로컬 화면 확인용). fake 결과는 품질이 아니라 흐름 확인용 —
   사용자에게 설명할 때 이 구분을 분명히 한다. 같은 설명이 README "2-1. LLM 서비스"와 LlmClient 주석에도 있다 (바꾸면 셋 다).
-- 챗봇(CHAT, C1): 처리기가 LlmClient 대신 **chat/ChatResponder**에 맡긴다 — C1은 PlaceholderChatResponder(임시 고정 답변, 토큰 0, 제공자와 무관).
-  C2에서 tool use 루프(ChatOrchestrator)로 바꾼다(LlmClient의 한 번 호출 모양이 아니라서 인터페이스를 따로 둠).
+- 챗봇(CHAT): 처리기가 LlmClient 대신 **chat/ChatResponder**(= ChatOrchestrator)에 맡긴다 — 아래 "챗봇 (7단계 C2)" 메모.
+  (LlmClient의 "한 번 호출" 모양이 아니라 모델 ↔ 도구를 여러 번 오가서 인터페이스를 따로 둠)
   **챗봇은 응답 캐시를 읽지도 쓰지도 않는다** — 답이 지난 대화·"내 쿠폰"처럼 사람·시점마다 다른 조회에 기대서, 같은 문장에 같은 답을 주면 남의 정보가 샐 수 있다.
-  예산 확인·사용량 기록·멱등(llm:done)·마감 건너뛰기는 다른 기능과 같다 (CostControlFlowTest 챗봇 2개).
+  예산 확인·사용량 기록·멱등(llm:done)·마감 건너뛰기는 다른 기능과 같다 (CostControlFlowTest 챗봇 3개).
 - 테스트(LlmRequestFlowTest): Kafka·Redis 컨테이너만. coupon-api 대신 llm-requests 발행, llm-results 직접 읽기.
   @MockitoSpyBean FakeLlmClient로 호출 횟수 검증 (재전달 1회, 만료·모르는 버전·처리 중·DLT는 0회).
   "처리하지 않음" 검증은 같은 키(=같은 파티션)로 표시용 요청을 뒤에 보내 그 결과가 오면 앞의 것도 처리된 것으로 본다 (sleep 없이).
@@ -748,6 +756,32 @@ GET  /api/chat/sessions/{id}/turns/{turnId} → PENDING / COMPLETED(answer) / FA
 - 설정 app.llm.chat.{request-timeout 60s, per-minute 5, per-day 50} (환경변수 없음). 구조 규칙(ArchitectureTest): chat → llm은 허용, chat → search 금지, coupon·llm → chat 금지.
 - 남은 것: 대화방 삭제·이름 바꾸기 없음, 오래된 대화 정리 없음, 대화방 수 상한 없음(한도로만 묶임).
 
+### 챗봇 (7단계 C2, llm-service) — chat/, client/anthropic/AnthropicChatModel, prompts/chat.v1.txt
+```
+llm-chat-requests ─▶ LlmRequestConsumer.consumeChat (그룹 llm-service-chat, app.llm.chat.concurrency 2) ─▶ LlmRequestProcessor (멱등·마감·예산 동일, 캐시 없음)
+  └▶ ChatOrchestrator.answer(회원, 질문+지난 10턴, 접수 시각, 마감)
+       ① McpToolGateway.open(회원) — mcp-server initialize + tools/list (헤더 X-Mcp-Service-Token, X-Mcp-User-Id)
+       ② ChatModel.start(질문, 도구 목록, 오늘 날짜) → next(toolsAllowed) ─┬ Answer → ChatReply (2000자로 자름, 빈 답 = INVALID_OUTPUT)
+                                                                       └ ToolRequests → 도구 실행 → addToolResults → ②로
+```
+- **토픽을 나눈 이유(벌크헤드)**: 챗봇 질문 하나가 스레드를 수십 초 잡고, 그 안의 search_events가 다시 llm-requests(EVENT_SEARCH)를 만든다.
+  같은 토픽·스레드면 챗봇이 기다리는 검색을 처리할 스레드가 없어(파티션이 그 스레드 담당이면 확정) 검색이 15초 마감 → 키워드 fallback이 된다.
+  coupon-api가 type으로 토픽을 고른다(LlmTopics.requestTopicOf). 에러 핸들러는 하나(Bean)를 두 리스너가 공유, DLT는 원래 토픽별.
+- **상한(질문 하나)**: 도구 최대 5회(넘는 호출은 실행하지 않고 "한도" 오류 결과 — 요청한 호출마다 결과가 하나씩 있어야 API가 받는다),
+  토큰 20,000(모든 호출 합, 넘으면 다음 호출은 도구 없이), 마감 5초 전부터 새 호출 안 함(LLM_UNAVAILABLE). 한도에 닿으면 끊지 않고 도구를 끈 마지막 답 1회
+  → 실제 최대 = 상한 + 호출 1회분. 도구를 껐는데도 도구를 요청하면 INVALID_OUTPUT. 실패해도 쓴 토큰은 모두 합쳐 보고(예산 기록).
+- **회원은 연결 헤더로만** — open(userId)에서 정해지고 모델은 도구 인자로 바꿀 수 없다(get_my_coupons 인자 없음). 도구는 전부 조회 전용.
+  MCP_SERVICE_TOKEN이 비면 open이 LLM_UNAVAILABLE(+ERROR 로그). 연결 실패도 LLM_UNAVAILABLE(모델 호출 0). 도구 호출 실패는 예외가 아니라 isError 결과 → 모델이 설명.
+- 질문마다 MCP 연결을 새로 연다(헤더에 회원이 실려 회원별 연결이 필요, 수십 ms라 무시할 만함).
+- **FakeChatModel**(기본): 발급 말("발급해", "받아줘" …) → 발급 말을 뺀 검색 + "발급은 직접" 안내 / 내 쿠폰 말 → get_my_coupons / "3번 이벤트" → get_event /
+  인사 → 도구 없이 안내 / 그 외 → search_events(문장 그대로). 도구 1회 → 결과를 틀에 넣은 답. 지난 대화는 쓰지 않는다. 토큰은 글자 수로 흉내.
+- **AnthropicChatModel**: tools = mcp-server tools/list의 JSON Schema 그대로(properties·required·additionalProperties), 응답은 `Message.toParam()`으로
+  **그대로** 이어 붙임(thinking 블록 보존 — append-only), 도구 결과는 한 user 메시지에 모두, 도구를 끌 땐 tool_choice none(정의는 유지),
+  thinking 미전송(적응형), effort = app.llm.anthropic.effort(low), max_tokens 8000, fallbacks "default". refusal → CONTENT_REFUSED, max_tokens → INVALID_OUTPUT.
+  재시도·서킷 브레이커는 AnthropicLlmClient와 공유(createMessage → guarded). 시스템 프롬프트 끝에 오늘 날짜·요일. **실제 API로는 아직 미확인**.
+- 설정 app.llm.chat.{concurrency, max-tool-calls, turn-token-cap, max-tokens, deadline-margin, mcp.{url(MCP_SERVER_URL), service-token(MCP_SERVICE_TOKEN), request-timeout 25s}}.
+- 제한: 컨테이너(llm 프로필)로 띄운 llm-service는 mcp-server(호스트 127.0.0.1)에 닿지 않는다 → 챗봇은 호스트 bootRun에서만. mcp-server 컨테이너화는 나중.
+
 ### MCP 서버 (7단계 B1·B2) — backend/mcp-server, com.couponrush.mcpserver, 포트 8082
 ```
 MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Session-Id) ─▶ HttpServletStreamableServerTransportProvider
@@ -776,7 +810,9 @@ MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Sessio
   거절(HTTP, initialize부터): 틀린 서비스 토큰·사용자 ID만 → 401, 서비스 토큰 + Bearer 함께·잘못된 사용자 ID·중복 헤더 → 400.
   SDK 연결: httpHeaderValidator(Host → 인증 순서) + contextExtractor(**HTTP 요청마다** Caller → exchange.transportContext()) — 세션 단위가 아니라 토큰을 바꾸면 다음 호출부터 반영.
   coupon-api 401: 사람 경로는 UNAUTHENTICATED("로그인이 필요합니다: {사유}" + 토큰 넣는 법), 내부 경로는 설정 오류라 UNAVAILABLE + ERROR 로그(두 서비스 INTERNAL_API_TOKEN 불일치).
-  검색도 사람의 Bearer를 함께 보내 한도를 회원별로 (공개 경로라 만료 토큰이면 비로그인 처리). 서비스 호출의 검색은 아직 IP 한도(C2에서 정리).
+  검색도 사람의 Bearer를 함께 보내 한도를 회원별로 (공개 경로라 만료 토큰이면 비로그인 처리). 서비스 호출(챗봇)의 검색은 coupon-api 내부 API
+  POST /internal/users/{id}/coupons/search + X-Internal-Token으로 보내 **그 회원의 한도**로 센다(C2 — 공개 경로면 모든 챗봇 검색이 127.0.0.1 하나의 비로그인 한도를 나눠 씀).
+  결과 폴링은 공개 GET /api/coupons/search/{id} 그대로.
   토큰 두 개를 나눈 이유: 구간마다 필요한 것만 가진다(llm-service는 coupon-api 내부 토큰을 모름, coupon-api는 MCP 토큰을 모름).
   mcp-server도 infra/.env를 읽는다(spring.config.import, 작업 폴더 backend/mcp-server).
 - 테스트 McpToolsTest: 공식 SDK 클라이언트(HttpClientStreamableHttpTransport)로 실제 연결, coupon-api는 WireMock. 포트 고정 18082

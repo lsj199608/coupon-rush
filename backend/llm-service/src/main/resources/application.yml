@@ -65,6 +65,16 @@ app:
     publish-timeout: 10s
     fake:
       delay: 0ms            # fake 응답 지연 (로컬에서 폴링·타임아웃 화면 확인용)
+    chat:                   # 챗봇 (7단계 C2). 요청은 llm-chat-requests 토픽 — 문구 생성·검색과 다른 스레드
+      concurrency: 2        # 동시에 처리하는 챗봇 질문 수 (질문 하나가 도구 호출로 수십 초 걸릴 수 있다)
+      max-tool-calls: 5     # 질문 하나에서 부를 수 있는 도구 수. 넘으면 도구 없이 지금까지 결과로 답하게 한다
+      turn-token-cap: 20000 # 질문 하나에 쓰는 토큰 상한 (일일 예산 50,000 중). 넘으면 도구 없이 마지막 답 1회
+      max-tokens: 8000      # 모델 호출 1회의 출력 상한 (생각 + 답)
+      deadline-margin: 5s   # 마감 이만큼 전에는 새 호출을 시작하지 않는다 (어차피 버려질 결과에 비용을 쓰지 않게)
+      mcp:
+        url: ${MCP_SERVER_URL:http://localhost:8082/mcp}
+        service-token: ${MCP_SERVICE_TOKEN:}   # mcp-server 와 같은 값. 비어 있으면 챗봇은 도구를 못 써서 LLM_UNAVAILABLE
+        request-timeout: 25s                   # 도구 호출 1회 (search_events 는 AI 검색을 최대 20초 기다린다)
 
 management:
   endpoints:

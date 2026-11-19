@@ -146,6 +146,46 @@ class EventSearchApiTest {
     // ───────────────────────── 접수 ─────────────────────────
 
     @Nested
+    class 내부_검색_챗봇용 {
+
+        private ResultActions internalSearch(long userId, String query, String internalToken, String bearer) throws Exception {
+            var builder = post("/internal/users/{id}/coupons/search", userId).contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(Map.of("query", query)));
+            if (internalToken != null) {
+                builder.header("X-Internal-Token", internalToken);
+            }
+            if (bearer != null) {
+                builder.header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer);
+            }
+            return mockMvc.perform(builder);
+        }
+
+        @Test
+        void 내부_토큰이면_경로의_회원으로_접수하고_한도도_그_회원으로_센다() throws Exception {
+            String body = internalSearch(user.getId(), "커피", "test-internal-token", null)
+                    .andExpect(status().isAccepted())
+                    .andExpect(header().string(HttpHeaders.LOCATION, startsWith("/api/coupons/search/")))
+                    .andReturn().getResponse().getContentAsString();
+            UUID requestId = UUID.fromString(objectMapper.readTree(body).get("requestId").asText());
+
+            assertThat(llmRequestRepository.findById(requestId).orElseThrow().getRequestedBy()).isEqualTo(user.getId());
+            assertThat(redisTemplate.opsForValue().get(rateLimiter.searchMinuteKey("user:" + user.getId(), now)))
+                    .as("회원별 한도").isEqualTo("1");
+            assertThat(redisTemplate.hasKey(rateLimiter.searchMinuteKey("ip:" + LOCAL_IP, now)))
+                    .as("공용 IP 한도는 쓰지 않는다").isFalse();
+            assertThat(poll(requestId).get("status").asText()).as("결과 조회는 공개 경로 그대로").isEqualTo("PENDING");
+        }
+
+        @Test
+        void 토큰이_없거나_사용자_JWT_면_열리지_않는다() throws Exception {
+            internalSearch(user.getId(), "커피", null, null).andExpect(status().isUnauthorized());
+            internalSearch(user.getId(), "커피", "wrong", null).andExpect(status().isUnauthorized());
+            internalSearch(user.getId(), "커피", null, userToken).andExpect(status().isForbidden());
+            assertThat(llmRequestRepository.count()).isZero();
+        }
+    }
+
+    @Nested
     class 접수 {
 
         @Test

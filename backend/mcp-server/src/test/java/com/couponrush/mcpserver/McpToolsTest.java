@@ -425,6 +425,20 @@ class McpToolsTest {
 
             couponApi.verify(postRequestedFor(urlEqualTo("/api/coupons/search")).withHeader("Authorization", equalTo("Bearer user-token")));
         }
+
+        @Test
+        void 서버_호출의_검색은_내부_API_로_그_회원의_한도를_쓴다() throws Exception {
+            couponApi.stubFor(post("/internal/users/5/coupons/search").willReturn(okJson("""
+                    {"requestId":null,"status":"FALLBACK","query":"치킨","fallbackReason":"RATE_LIMITED","keywords":["치킨"],"events":[]}""")));
+
+            JsonNode body = json(call(connect(Map.of("X-Mcp-Service-Token", SERVICE_TOKEN, "X-Mcp-User-Id", "5")),
+                    "search_events", Map.of("query", "치킨")));
+
+            assertThat(body.get("searchMethod").asText()).isEqualTo("KEYWORD");
+            couponApi.verify(postRequestedFor(urlEqualTo("/internal/users/5/coupons/search"))
+                    .withHeader("X-Internal-Token", equalTo("test-internal-token")).withoutHeader("Authorization"));
+            couponApi.verify(0, postRequestedFor(urlEqualTo("/api/coupons/search")));
+        }
     }
 
     // ───────────────────────── 연결 단계 인증 (HTTP) ─────────────────────────

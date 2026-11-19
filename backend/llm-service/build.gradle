@@ -17,6 +17,9 @@ dependencies {
 	// Anthropic 공식 Java SDK — 구조화된 출력, 거절(stop_reason=refusal), 사용 토큰, 상태코드별 예외를 그대로 쓴다.
 	// coupon-api 에는 절대 넣지 않는다 (LlmIsolationTest 가 검사)
 	implementation 'com.anthropic:anthropic-java:3.2.0'
+	// 챗봇(7단계 C2)이 도구를 부르는 MCP 클라이언트 — mcp-server 와 같은 공식 SDK·버전 (Spring AI 없음)
+	implementation 'io.modelcontextprotocol.sdk:mcp-core:2.1.0'
+	implementation 'io.modelcontextprotocol.sdk:mcp-json-jackson2:2.1.0'
 	// 서킷 브레이커 (코어만 — Spring Boot 스타터 없이 코드로 설정)
 	implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.2.0'
 

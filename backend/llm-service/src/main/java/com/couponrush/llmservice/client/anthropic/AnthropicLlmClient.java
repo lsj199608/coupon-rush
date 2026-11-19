@@ -11,6 +11,7 @@ import com.anthropic.errors.BadRequestException;
 import com.anthropic.errors.InternalServerException;
 import com.anthropic.errors.RateLimitException;
 import com.anthropic.errors.UnprocessableEntityException;
+import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.OutputConfig;
 import com.anthropic.models.messages.StopReason;
@@ -53,6 +54,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Anthropic(Claude) 제공자. 공식 Java SDK 로 Messages API 를 한 번(필요하면 재생성 한 번 더) 부른다.
@@ -224,13 +226,26 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
      */
     private <T> StructuredMessage<T> call(StructuredMessageCreateParams<T> params, String model,
                                           int inputTokens, int outputTokens) {
+        return guarded(() -> client.messages().create(params), model, inputTokens, outputTokens);
+    }
+
+    /**
+     * 챗봇(tool use)용 일반 메시지 호출 — 문구·검색과 <b>같은 클라이언트·서킷 브레이커</b>를 쓴다 (같은 제공자의 장애이므로).
+     * 실패 처리는 {@link #guarded} 그대로.
+     */
+    Message createMessage(MessageCreateParams params, String model, int inputTokens, int outputTokens) {
+        return guarded(() -> client.messages().create(params), model, inputTokens, outputTokens);
+    }
+
+    /** 서킷 확인 → 호출 → 결과를 서킷에 기록. 실패는 모두 LLM_UNAVAILABLE (서킷에는 제공자 쪽 문제만 실패로 센다) */
+    private <M> M guarded(Supplier<M> request, String model, int inputTokens, int outputTokens) {
         if (!circuitBreaker.tryAcquirePermission()) {
             throw new LlmCallException(LlmFailureReason.LLM_UNAVAILABLE, "서킷 브레이커 열림 — 호출하지 않음",
                     model, inputTokens, outputTokens, null);
         }
         long start = System.nanoTime();
         try {
-            StructuredMessage<T> message = client.messages().create(params);
+            M message = request.get();
             circuitBreaker.onSuccess(System.nanoTime() - start, TimeUnit.NANOSECONDS);
             return message;
         } catch (BadRequestException | UnprocessableEntityException e) {
@@ -312,6 +327,10 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    LlmServiceProperties.Anthropic config() {
+        return config;
     }
 
     CircuitBreaker.State circuitState() {

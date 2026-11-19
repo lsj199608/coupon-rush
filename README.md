@@ -86,10 +86,14 @@ cd backend
 |---|---|---|
 | 이벤트 문구 생성 | `FakeLlmClient.generateEventCopy` — 톤별 고정 문장에 키워드·수량·기간을 끼워 넣음 | `prompts/event-copy.v1.txt` + `EventCopyOutput` / `EventCopyOutputValidator` |
 | 자연어 검색 | `FakeEventSearch` — 정해진 표현만 인식("진행 중", "남은", "이번 주 끝나는" 등), 나머지 단어 → keywords. 처음 보는 표현은 이해하지 못함 | `prompts/event-search.v1.txt` + `EventSearchOutput` / `EventSearchOutputValidator` |
-| 챗봇 (7단계 C, 진행 중) | 지금은 제공자와 상관없이 `chat/PlaceholderChatResponder`가 **임시 고정 답변**("받은 질문: …")만 합니다. C2에서 도구를 쓰는 챗봇으로 바뀝니다 | (C2에서 추가) |
+| 챗봇 | `chat/model/FakeChatModel` — 정해진 말("내 쿠폰", "3번 이벤트", "발급해줘" …)로 도구를 하나 골라 mcp-server로 실제 조회하고, 결과를 틀에 넣어 답함. 앞 대화는 이해하지 못함 | `prompts/chat.v1.txt` + mcp-server 도구 목록 → Claude tool use (`client/anthropic/AnthropicChatModel`) |
 
 (파일 위치: `backend/llm-service/src/main/java/com/couponrush/llmservice/client/`, 프롬프트는 `.../src/main/resources/prompts/`)
 어느 제공자든 결과는 같은 계약 형식으로 나가므로 coupon-api는 차이를 모릅니다. 기동 로그의 `LLM 제공자: fake` / `anthropic`으로 어느 쪽인지 확인할 수 있습니다.
+
+**챗봇을 쓰려면** mcp-server(8082)도 띄우고, `infra/.env`에 `MCP_SERVICE_TOKEN`·`INTERNAL_API_TOKEN`을 넣어야 합니다
+(챗봇 → mcp-server → coupon-api 구간 인증. 없으면 챗봇 질문만 실패합니다). 지금은 **호스트 bootRun(B)에서만** 챗봇 도구가 동작합니다 —
+mcp-server가 루프백(127.0.0.1)에서만 접속을 받아 컨테이너(A)에서는 닿지 않습니다.
 
 두 가지 방법 중 **하나만** 씁니다 (둘 다 켜면 같은 컨슈머 그룹을 나눠 가져서 로그를 따라가기 어렵습니다).
 
@@ -218,7 +222,8 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 | `LLM_API_KEY` | (없음) | Anthropic API 키. **비밀값**, llm-service만 읽음 |
 | `LLM_MODEL` | `claude-sonnet-5-5` | 모델 ID (예: `claude-haiku-5-5`, `claude-opus-5-5`) |
 | `LLM_DAILY_TOKEN_BUDGET` | `50000` | 서비스 전체 하루 토큰(입력+출력) 예산, 한국 자정 초기화. 넘으면 문구 생성 요청을 접수 단계에서 429로 거절 |
-| `MCP_SERVICE_TOKEN` | (없음 = 꺼짐) | 챗봇 서버(llm-service) → mcp-server 서비스 인증 값(`X-Mcp-Service-Token`). **비밀값**. 사람이 Claude Code로 쓸 때는 필요 없음 |
+| `MCP_SERVICE_TOKEN` | (없음 = 꺼짐) | 챗봇 서버(llm-service) → mcp-server 서비스 인증 값(`X-Mcp-Service-Token`). **비밀값**, mcp-server·llm-service가 같은 값을 읽음. 없으면 챗봇 질문이 실패(LLM_UNAVAILABLE). 사람이 Claude Code로 쓸 때는 필요 없음 |
+| `MCP_SERVER_URL` | `http://localhost:8082/mcp` | 챗봇(llm-service)이 도구를 부르는 mcp-server 주소 |
 | `INTERNAL_API_TOKEN` | (없음 = 꺼짐) | mcp-server → coupon-api 내부 API(`/internal/**`) 인증 값(`X-Internal-Token`). **비밀값**, coupon-api·mcp-server가 같은 값을 읽음. `MCP_SERVICE_TOKEN`과 다르게 |
 
 `.env`는 기동할 때만 읽습니다. 값을 바꾸면 `bootRun`(포트·DB 값이면 `docker compose`도)을 다시 시작하세요.

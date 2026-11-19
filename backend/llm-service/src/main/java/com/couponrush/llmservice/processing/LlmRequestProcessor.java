@@ -191,7 +191,7 @@ public class LlmRequestProcessor {
                             c.inputTokens(), c.outputTokens(), false, elapsedMillis(startedAt), clock.instant());
                 }
                 case CHAT -> {
-                    ChatCompletion c = chatResponder.answer(request.requestedBy(), request.chat());
+                    ChatCompletion c = chatResponder.answer(request.requestedBy(), request.chat(), request.requestedAt(), request.deadline());
                     yield LlmResultMessage.chatCompleted(request.requestId(), c.reply(), c.model(),
                             c.inputTokens(), c.outputTokens(), elapsedMillis(startedAt), clock.instant());
                 }

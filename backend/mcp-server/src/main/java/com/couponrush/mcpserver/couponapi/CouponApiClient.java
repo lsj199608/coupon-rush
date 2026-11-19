@@ -67,21 +67,9 @@ public class CouponApiClient {
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + user.accessToken()).retrieve().body(MY_COUPONS));
         }
         if (caller instanceof Caller.Service service && service.userId() != null) {
-            if (internalToken == null || internalToken.isBlank()) {
-                log.error("서비스 호출의 사용자 쿠폰 조회 실패: app.mcp.coupon-api.internal-token(INTERNAL_API_TOKEN)이 비어 있음");
-                throw new CouponApiException(Kind.UNAVAILABLE, "쿠폰 서비스 내부 연결이 설정되지 않았습니다.");
-            }
-            try {
-                return call("사용자 쿠폰 조회(내부)", () -> restClient.get().uri("/internal/users/{id}/coupons", service.userId())
-                        .header(INTERNAL_TOKEN_HEADER, internalToken).retrieve().body(MY_COUPONS));
-            } catch (CouponApiException e) {
-                if (e.kind() == Kind.UNAUTHENTICATED) {
-                    // 사용자 탓이 아니라 서버 설정(두 서비스의 INTERNAL_API_TOKEN 불일치) 문제
-                    log.error("coupon-api 내부 API 가 X-Internal-Token 을 거절함 — 두 서비스의 INTERNAL_API_TOKEN 이 같은지 확인");
-                    throw new CouponApiException(Kind.UNAVAILABLE, "쿠폰 서비스 내부 연결에 실패했습니다.", e);
-                }
-                throw e;
-            }
+            String token = requireInternalToken("서비스 호출의 사용자 쿠폰 조회");
+            return internal("사용자 쿠폰 조회(내부)", () -> restClient.get().uri("/internal/users/{id}/coupons", service.userId())
+                    .header(INTERNAL_TOKEN_HEADER, token).retrieve().body(MY_COUPONS));
         }
         throw new CouponApiException(Kind.UNAUTHENTICATED, "로그인한 사용자만 쓸 수 있습니다.");
     }
@@ -96,16 +84,7 @@ public class CouponApiClient {
      * coupon-api 는 마감(15초)이 지나면 키워드 검색으로 끝내므로, 보통 대기 한도(20초) 전에 COMPLETED / FALLBACK 이 온다.
      */
     public SearchResult searchEvents(String query, Caller caller) {
-        // 로그인한 사람이면 토큰을 함께 보내 검색 한도를 회원별로 센다 (없으면 coupon-api 는 IP 별 — mcp-server 하나가 모두 127.0.0.1).
-        // 공개 경로라 토큰이 만료돼도 401 이 아니라 비로그인으로 처리된다
-        String authorization = caller instanceof Caller.User user ? "Bearer " + user.accessToken() : null;
-        SearchResult result = call("이벤트 검색", () -> restClient.post().uri("/api/coupons/search")
-                .headers(headers -> {
-                    if (authorization != null) {
-                        headers.set(HttpHeaders.AUTHORIZATION, authorization);
-                    }
-                })
-                .contentType(MediaType.APPLICATION_JSON).body(Map.of("query", query)).retrieve().body(SearchResult.class));
+        SearchResult result = startSearch(query, caller);
         long deadline = System.nanoTime() + search.waitTimeout().toNanos();
         while (result != null && result.isPending()) {
             if (System.nanoTime() >= deadline) {
@@ -120,6 +99,54 @@ public class CouponApiClient {
             throw new CouponApiException(Kind.UNAVAILABLE, "coupon-api 가 빈 응답을 보냈습니다.");
         }
         return result;
+    }
+
+    /**
+     * 검색 접수. 한도를 누구로 셀지가 호출자마다 다르다:
+     * <ul>
+     *   <li>User → 공개 POST /api/coupons/search + 같은 Bearer (회원별 한도. 만료 토큰이면 coupon-api 가 비로그인으로 처리)</li>
+     *   <li>Service + userId (챗봇) → 내부 POST /internal/users/{id}/coupons/search + X-Internal-Token (그 회원의 한도) —
+     *       공개 경로로 보내면 모든 챗봇 검색이 mcp-server 의 IP(127.0.0.1) 비로그인 한도 하나를 나눠 쓴다</li>
+     *   <li>그 외 → 공개 경로, 비로그인 (IP 한도)</li>
+     * </ul>
+     * 결과 조회(GET /api/coupons/search/{id})는 셋 다 공개 경로다 (requestId 를 아는 것이 권한).
+     */
+    private SearchResult startSearch(String query, Caller caller) {
+        if (caller instanceof Caller.Service service && service.userId() != null) {
+            String token = requireInternalToken("서비스 호출의 검색");
+            return internal("이벤트 검색(내부)", () -> restClient.post().uri("/internal/users/{id}/coupons/search", service.userId())
+                    .header(INTERNAL_TOKEN_HEADER, token)
+                    .contentType(MediaType.APPLICATION_JSON).body(Map.of("query", query)).retrieve().body(SearchResult.class));
+        }
+        String authorization = caller instanceof Caller.User user ? "Bearer " + user.accessToken() : null;
+        return call("이벤트 검색", () -> restClient.post().uri("/api/coupons/search")
+                .headers(headers -> {
+                    if (authorization != null) {
+                        headers.set(HttpHeaders.AUTHORIZATION, authorization);
+                    }
+                })
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("query", query)).retrieve().body(SearchResult.class));
+    }
+
+    private String requireInternalToken(String action) {
+        if (internalToken == null || internalToken.isBlank()) {
+            log.error("{} 실패: app.mcp.coupon-api.internal-token(INTERNAL_API_TOKEN)이 비어 있음", action);
+            throw new CouponApiException(Kind.UNAVAILABLE, "쿠폰 서비스 내부 연결이 설정되지 않았습니다.");
+        }
+        return internalToken;
+    }
+
+    /** 내부 API 호출. 401 은 사용자 탓이 아니라 서버 설정(두 서비스의 INTERNAL_API_TOKEN 불일치) 문제 → UNAVAILABLE */
+    private <T> T internal(String action, Supplier<T> request) {
+        try {
+            return call(action, request);
+        } catch (CouponApiException e) {
+            if (e.kind() == Kind.UNAUTHENTICATED) {
+                log.error("coupon-api 내부 API 가 X-Internal-Token 을 거절함 — 두 서비스의 INTERNAL_API_TOKEN 이 같은지 확인");
+                throw new CouponApiException(Kind.UNAVAILABLE, "쿠폰 서비스 내부 연결에 실패했습니다.", e);
+            }
+            throw e;
+        }
     }
 
     private void pause() {
