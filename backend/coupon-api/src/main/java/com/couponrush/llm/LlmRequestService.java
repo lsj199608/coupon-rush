@@ -2,6 +2,8 @@ package com.couponrush.llm;
 
 import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
+import com.couponrush.llm.contract.ChatInput;
+import com.couponrush.llm.contract.ChatReply;
 import com.couponrush.llm.contract.EventCopyCandidate;
 import com.couponrush.llm.contract.EventCopyInput;
 import com.couponrush.llm.contract.EventSearchFilter;
@@ -23,8 +25,12 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -108,6 +114,45 @@ public class LlmRequestService {
     }
 
     /**
+     * 챗봇 질문의 <b>접수 준비</b>: 예산 → 한도 → PENDING 저장까지만 하고 발행하지 않는다 (발행은 {@link #publish}).
+     * 둘을 나눈 이유: 챗봇은 PENDING 행과 대화 턴(chat_turns)을 <b>한 트랜잭션으로</b> 저장해야 하고, 발행은 그 커밋 뒤여야 한다
+     * (커밋 전에 발행하면 결과가 행보다 먼저 와서 버려진다 — 이 클래스의 순서 규칙과 같은 이유).
+     * 그래서 이 메서드는 호출하는 쪽의 트랜잭션 안에서 불러야 한다 (저장이 그 트랜잭션에 참여한다).
+     * 한도·예산 거절은 문구 생성과 같은 BusinessException 이다 — 챗봇용 에러 코드로 바꾸는 것은 호출하는 쪽.
+     */
+    public LlmRequestMessage prepareChat(long userId, ChatInput input) {
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        budgetGuard.checkRemaining(now);
+        rateLimiter.acquireChat(userId, now);
+
+        UUID requestId = UUID.randomUUID();
+        Instant deadline = now.plus(properties.chat().requestTimeout());
+        LlmRequestMessage message = LlmRequestMessage.chat(requestId, userId, now, deadline, input);
+        repository.save(LlmRequest.pending(requestId, LlmRequestType.CHAT, userId, toJson(input), now, deadline));
+        return message;
+    }
+
+    /**
+     * 챗봇 요청들을 한 번에 읽는다 (대화방의 턴 목록). 마감이 지난 PENDING 은 이 자리에서 TIMEOUT 으로 확정한 뒤의 상태를 준다.
+     * 소유자 확인은 하지 않는다 — 대화방 소유자를 확인한 호출자(ChatService)가 그 방의 요청 ID 만 넘긴다.
+     */
+    public Map<UUID, LlmRequest> getChats(Collection<UUID> requestIds) {
+        Instant now = clock.instant();
+        Map<UUID, LlmRequest> found = repository.findAllById(requestIds).stream()
+                .filter(request -> request.getType() == LlmRequestType.CHAT)
+                .collect(Collectors.toMap(LlmRequest::getRequestId, Function.identity()));
+        found.replaceAll((id, request) -> request.isExpiredPending(now) && repository.timeoutIfExpired(id, now) == 1
+                ? repository.findById(id).orElseThrow()
+                : request);
+        return found;
+    }
+
+    /** COMPLETED 챗봇 요청의 답변 */
+    public ChatReply chatReplyOf(LlmRequest request) {
+        return readJson(request.getResult(), ChatReply.class, request);
+    }
+
+    /**
      * 검색 요청 조회. 소유자를 확인하지 않는다 — 결과는 공개 이벤트 목록이고, 추측할 수 없는 requestId(UUID)를 아는 것이 곧 권한이다.
      * (공개 경로라 토큰이 만료된 채로 와도 401 → refresh 가 일어나지 않으므로, 소유자 검사를 하면 본인 요청도 못 보게 된다)
      * 마감이 지난 PENDING 은 문구 생성과 같이 이 자리에서 TIMEOUT 으로 확정한다.
@@ -151,7 +196,11 @@ public class LlmRequestService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.LLM_REQUEST_NOT_FOUND));
     }
 
-    private void publish(LlmRequestMessage message) {
+    /**
+     * llm-requests 발행 + 브로커 ack 대기. 실패하면 요청을 FAILED(PUBLISH_FAILED)로 남기고 LLM_REQUEST_UNAVAILABLE.
+     * PENDING 행이 <b>커밋된 뒤에</b> 불러야 한다.
+     */
+    public void publish(LlmRequestMessage message) {
         try {
             kafkaTemplate.send(LlmTopics.REQUESTS, message.requestId().toString(), toJson(message))
                     .get(properties.publishTimeout().toMillis(), TimeUnit.MILLISECONDS);

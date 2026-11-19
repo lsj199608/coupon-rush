@@ -187,6 +187,7 @@ public class AnthropicLlmClient implements LlmClient, AutoCloseable {
         String prompt = switch (type) {
             case EVENT_COPY -> PROMPT_VERSION;   // 기존 값 그대로 — 이미 쌓인 문구 캐시를 유지
             case EVENT_SEARCH -> SEARCH_PROMPT_VERSION;
+            case CHAT -> throw new IllegalArgumentException("챗봇 답은 캐시하지 않는다 (LlmRequestProcessor)");
         };
         return "anthropic:" + config.model() + ":" + prompt + ":effort=" + config.effort();
     }

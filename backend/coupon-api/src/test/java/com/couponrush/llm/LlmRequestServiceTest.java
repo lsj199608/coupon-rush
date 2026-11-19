@@ -46,7 +46,7 @@ class LlmRequestServiceTest {
     private final KafkaTemplate<String, String> kafkaTemplate = mock(KafkaTemplate.class);
     private final LlmProperties properties = new LlmProperties(Duration.ofSeconds(60), Duration.ofMillis(100),
             ZoneId.of("Asia/Seoul"), new LlmProperties.RateLimit(5, 50), new LlmProperties.TimeoutSweep(false, Duration.ofSeconds(30)), 50_000,
-            new LlmProperties.Search(Duration.ofSeconds(15), 10, 100));
+            new LlmProperties.Search(Duration.ofSeconds(15), 10, 100), new LlmProperties.Chat(Duration.ofSeconds(60), 5, 50));
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     private final LlmRequestService service = new LlmRequestService(repository, rateLimiter, budgetGuard, kafkaTemplate, objectMapper,

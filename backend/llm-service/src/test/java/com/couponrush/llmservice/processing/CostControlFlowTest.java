@@ -1,5 +1,7 @@
 package com.couponrush.llmservice.processing;
 
+import com.couponrush.llm.contract.ChatInput;
+import com.couponrush.llm.contract.ChatTurn;
 import com.couponrush.llm.contract.EventCopyInput;
 import com.couponrush.llm.contract.EventCopyTone;
 import com.couponrush.llm.contract.EventSearchInput;
@@ -10,6 +12,7 @@ import com.couponrush.llm.contract.LlmResultStatus;
 import com.couponrush.llm.contract.LlmTopics;
 import com.couponrush.llm.contract.LlmUsageKeys;
 import com.couponrush.llmservice.TestcontainersConfiguration;
+import com.couponrush.llmservice.chat.PlaceholderChatResponder;
 import com.couponrush.llmservice.client.FakeLlmClient;
 import com.couponrush.llmservice.client.LlmCallException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -53,6 +56,7 @@ class CostControlFlowTest {
     @Autowired ObjectMapper objectMapper;
     @Autowired StringRedisTemplate redisTemplate;
     @MockitoSpyBean FakeLlmClient llmClient;
+    @MockitoSpyBean PlaceholderChatResponder chatResponder;
 
     Consumer<String, String> results;
 
@@ -219,5 +223,37 @@ class CostControlFlowTest {
         assertThat(cached.status()).isEqualTo(LlmResultStatus.COMPLETED);
         assertThat(cached.cached()).isTrue();
         verify(llmClient, times(1)).generateEventCopy(any());
+    }
+
+    // ───────────────────────── 챗봇 (7단계 C1 — 임시 답변) ─────────────────────────
+
+    private static LlmRequestMessage chat(String message) {
+        Instant now = Instant.now();
+        return LlmRequestMessage.chat(UUID.randomUUID(), 7L, now, now.plusSeconds(60),
+                new ChatInput(message, List.of(new ChatTurn("이전 질문", "이전 답"))));
+    }
+
+    @Test
+    void 챗봇_질문은_답변_결과로_돌아오고_같은_문장이어도_캐시하지_않는다() throws Exception {
+        LlmResultMessage first = process(chat("내 쿠폰 보여줘"));
+        LlmResultMessage second = process(chat("내 쿠폰 보여줘"));
+
+        assertThat(first.status()).isEqualTo(LlmResultStatus.COMPLETED);
+        assertThat(first.chatReply().text()).contains("내 쿠폰 보여줘").contains("이전 대화 1개");
+        assertThat(first.candidates()).isEmpty();
+        assertThat(first.searchFilter()).isNull();
+        assertThat(second.cached()).as("답이 사람·시점마다 다른 조회에 기대므로 캐시하지 않는다").isFalse();
+        verify(chatResponder, times(2)).answer(org.mockito.ArgumentMatchers.eq(7L), any());
+        assertThat(redisTemplate.keys("llm:cache:*")).as("캐시에 쓰지도 않는다").isEmpty();
+    }
+
+    @Test
+    void 챗봇도_예산을_다_쓰면_답을_만들지_않고_BUDGET_EXCEEDED() throws Exception {
+        redisTemplate.opsForHash().put(LlmUsageKeys.usageKey(Instant.now()), LlmUsageKeys.TOTAL_TOKENS, "50000");
+
+        LlmResultMessage result = process(chat("예산 소진"));
+
+        assertThat(result.failureReason()).isEqualTo(LlmFailureReason.BUDGET_EXCEEDED);
+        verify(chatResponder, never()).answer(org.mockito.ArgumentMatchers.anyLong(), any());
     }
 }

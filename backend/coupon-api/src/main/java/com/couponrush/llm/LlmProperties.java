@@ -16,6 +16,7 @@ import java.time.ZoneId;
  * @param timeoutSweep   마감 지난 PENDING 을 TIMEOUT 으로 정리하는 스케줄러
  * @param dailyTokenBudget 일일 토큰 예산 (LLM_DAILY_TOKEN_BUDGET — llm-service 와 같은 값). 이미 넘었으면 접수 단계에서 거절
  * @param search         자연어 검색 (7단계 A3) 설정 — 문구 생성과 마감·한도가 다르다
+ * @param chat           챗봇 (7단계 C) 설정
  */
 @ConfigurationProperties("app.llm")
 public record LlmProperties(
@@ -25,7 +26,8 @@ public record LlmProperties(
         @DefaultValue RateLimit rateLimit,
         @DefaultValue TimeoutSweep timeoutSweep,
         @DefaultValue("50000") long dailyTokenBudget,
-        @DefaultValue Search search) {
+        @DefaultValue Search search,
+        @DefaultValue Chat chat) {
 
     /**
      * @param requestTimeout 검색 마감. 검색창은 몇 초 안에 결과가 보여야 하므로 문구 생성(60초)보다 짧다 — 넘으면 키워드 검색으로 대신한다
@@ -35,6 +37,16 @@ public record LlmProperties(
     public record Search(@DefaultValue("15s") Duration requestTimeout,
                          @DefaultValue("10") int perMinute,
                          @DefaultValue("100") int perDay) {
+    }
+
+    /**
+     * @param requestTimeout 챗봇 답 마감. 도구를 여러 번 부를 수 있어(C2) 검색(15초)보다 길다
+     * @param perMinute      회원별 분당 질문 한도 (문구 생성·검색과 별도 카운터)
+     * @param perDay         일 한도
+     */
+    public record Chat(@DefaultValue("60s") Duration requestTimeout,
+                       @DefaultValue("5") int perMinute,
+                       @DefaultValue("50") int perDay) {
     }
 
     /** 고정 창(fixed window) 카운터. 분 경계에서 순간적으로 최대 2배가 될 수 있지만, 비용 상한 목적에는 충분하다 */

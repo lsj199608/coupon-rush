@@ -7,6 +7,8 @@ import com.couponrush.llm.contract.LlmResultMessage;
 import com.couponrush.llm.contract.LlmResultStatus;
 import com.couponrush.llm.contract.LlmTopics;
 import com.couponrush.llmservice.LlmServiceProperties;
+import com.couponrush.llmservice.chat.ChatCompletion;
+import com.couponrush.llmservice.chat.ChatResponder;
 import com.couponrush.llmservice.client.LlmCallException;
 import com.couponrush.llmservice.client.LlmClient;
 import com.couponrush.llmservice.client.KstDates;
@@ -52,6 +54,7 @@ public class LlmRequestProcessor {
     }
 
     private final LlmClient client;
+    private final ChatResponder chatResponder;
     private final ProcessedRequestStore store;
     private final ResponseCache cache;
     private final UsageLedger usage;
@@ -59,9 +62,11 @@ public class LlmRequestProcessor {
     private final LlmServiceProperties properties;
     private final Clock clock;
 
-    public LlmRequestProcessor(LlmClient client, ProcessedRequestStore store, ResponseCache cache, UsageLedger usage,
+    public LlmRequestProcessor(LlmClient client, ChatResponder chatResponder, ProcessedRequestStore store,
+                               ResponseCache cache, UsageLedger usage,
                                ObjectMapper objectMapper, LlmServiceProperties properties, Clock clock) {
         this.client = client;
+        this.chatResponder = chatResponder;
         this.store = store;
         this.cache = cache;
         this.usage = usage;
@@ -106,11 +111,15 @@ public class LlmRequestProcessor {
      * ⑤ 응답 캐시 (regenerate 가 아니면) → ⑥ 일일 예산 → ⑦ LLM 호출 → 사용량 기록 → 성공이면 캐시 저장.
      * 캐시를 예산보다 먼저 보는 이유: 캐시 응답은 비용이 0이라 예산을 다 써도 줄 수 있다.
      * (단 이미 소진된 뒤의 새 요청은 coupon-api LlmBudgetGuard 가 접수 단계에서 먼저 막는다 — 여기 오는 것은 접수 후 소진된 경우)
+     * <p>
+     * 챗봇(CHAT)은 캐시를 읽지도 쓰지도 않는다 — 답이 지난 대화와 "내 쿠폰"처럼 사람·시점마다 다른 조회 결과에 기대서,
+     * 같은 문장이라도 다른 사람에게 같은 답을 주면 남의 정보가 샐 수 있다.
      */
     private Processed cachedOrBudgetedOrGenerated(LlmRequestMessage request, Instant now) {
-        String cacheKey = cacheKey(request);
+        boolean cacheable = request.type() != LlmRequestType.CHAT;
+        String cacheKey = cacheable ? cacheKey(request) : null;
 
-        if (!request.regenerate()) {
+        if (cacheable && !request.regenerate()) {
             Optional<LlmResultMessage> cached = cache.find(cacheKey)
                     .flatMap(entry -> fromCache(request, entry, now));
             if (cached.isPresent()) {
@@ -132,7 +141,7 @@ public class LlmRequestProcessor {
         if (result.totalTokens() > 0) {
             usage.recordCall(now, result.inputTokens(), result.outputTokens());
         }
-        if (result.status() == LlmResultStatus.COMPLETED) {
+        if (cacheable && result.status() == LlmResultStatus.COMPLETED) {
             cache.save(cacheKey, new ResponseCache.Entry(result.candidates(), result.searchFilter(), result.model()));
         }
         return new Processed(Outcome.GENERATED, Optional.of(result));
@@ -147,6 +156,7 @@ public class LlmRequestProcessor {
             case EVENT_COPY -> ResponseCache.key(client.cacheIdentity(LlmRequestType.EVENT_COPY), request.eventCopy());
             case EVENT_SEARCH -> ResponseCache.key(client.cacheIdentity(LlmRequestType.EVENT_SEARCH), request.eventSearch(),
                     KstDates.dateOf(request.requestedAt()));
+            case CHAT -> throw new IllegalStateException("챗봇 요청은 캐시하지 않는다");
         };
     }
 
@@ -158,6 +168,7 @@ public class LlmRequestProcessor {
                         0, 0, true, elapsedMillis(now), clock.instant());
                 case EVENT_SEARCH -> LlmResultMessage.searchCompleted(request.requestId(), entry.searchFilter(), entry.model(),
                         0, 0, true, elapsedMillis(now), clock.instant());
+                case CHAT -> throw new IllegalStateException("챗봇 요청은 캐시하지 않는다");
             });
         } catch (RuntimeException e) {
             log.warn("캐시 값을 쓸 수 없음 — 새로 생성: requestId={}, type={}, reason={}",
@@ -178,6 +189,11 @@ public class LlmRequestProcessor {
                     LlmSearchCompletion c = client.extractSearchFilter(request.eventSearch(), KstDates.dateOf(request.requestedAt()));
                     yield LlmResultMessage.searchCompleted(request.requestId(), c.filter(), c.model(),
                             c.inputTokens(), c.outputTokens(), false, elapsedMillis(startedAt), clock.instant());
+                }
+                case CHAT -> {
+                    ChatCompletion c = chatResponder.answer(request.requestedBy(), request.chat());
+                    yield LlmResultMessage.chatCompleted(request.requestId(), c.reply(), c.model(),
+                            c.inputTokens(), c.outputTokens(), elapsedMillis(startedAt), clock.instant());
                 }
             };
         } catch (LlmCallException e) {

@@ -134,7 +134,10 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           → coupon-api 내부 API GET /internal/users/{id}/coupons(X-Internal-Token, ROLE_INTERNAL_SERVICE). 새 env MCP_SERVICE_TOKEN·INTERNAL_API_TOKEN
           — 아래 "MCP 서버" 메모의 "인증 (B2)". 테스트: McpToolsTest(get_my_coupons·연결 인증), InternalApiTest
     - [ ] B3) 수동 확인: Claude Code에 MCP 서버 연결해 도구 호출
-    - [ ] C1) coupon-api: V8 chat_sessions / chat_messages (V7은 A1에서 사용), 메시지 전송 API(202 + 폴링)
+    - [x] C1) 대화 저장 + 질문 API — 아래 "챗봇 대화 (7단계 C1, coupon-api)" 메모. V8 chat_sessions / chat_turns(턴 = 질문 + LLM 요청, 답은 llm_requests에만),
+          POST /api/chat/sessions/{id}/turns(202 + 폴링), 방마다 대기 중 질문 1개(409), 한도 분 5·일 50(별도 카운터), 최근 답 받은 10턴을 history로.
+          계약: LlmRequestType.CHAT(회원만), ChatInput / ChatTurn / ChatReply. llm-service는 **임시 고정 답변**(PlaceholderChatResponder, LLM·도구 호출 없음),
+          챗봇은 캐시하지 않음. 테스트: ChatApiTest(17), 계약·llm-service 챗봇 테스트. 실제 실행 확인은 아직
     - [ ] C2) llm-service ChatOrchestrator: tool use 루프(MCP 클라이언트), 도구 호출 최대 5회·턴당 토큰 상한·마감, 기존 예산·레이트 리밋 재사용
     - [ ] C3) fake 제공자 시나리오(도구 호출 → 결과 → 답변, 발급 요청 거절) 테스트
     - [ ] C4) 프론트 채팅 위젯 (폴링, SSE는 나중)
@@ -206,6 +209,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - Security: 기본은 전부 인증 필요. 공개 경로는 /actuator/health, POST /api/auth/refresh, GET /api/coupons, GET /api/coupons/*,
   POST /api/coupons/search, GET /api/coupons/search/* (A3).
   /api/admin/**는 ROLE_ADMIN. stateless, CSRF/폼로그인 off (OAuth2 state 보관에만 세션 잠깐 사용).
+- 챗봇 /api/chat/** (C1)은 로그인 필요 — 기본 규칙(anyRequest().authenticated())이라 SecurityConfig에 따로 없다.
 - 서비스 간 내부 API /internal/** (B2): X-Internal-Token = INTERNAL_API_TOKEN이면 ROLE_INTERNAL_SERVICE (InternalServiceAuthenticationFilter).
   사용자 JWT(ADMIN 포함)로는 403 — 경로의 userId를 그대로 믿는 API라서. 토큰은 /internal/**에서만 동작(사용자 API에 못 씀), 미설정이면 전부 401(닫힘),
   비교는 MessageDigest.isEqual. Vite 프록시는 /api만 넘기므로 브라우저에서 닿지 않고, 배포 시 리버스 프록시도 /internal/**을 내보내지 않는다.
@@ -564,6 +568,11 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
   전부 비어도 COMPLETED(isEmpty, JSON에는 안 실림 — 어떻게 보여 줄지는 coupon-api가 정함). 기간은 발급 기간 기준 [from, to).
   "이번 주" 같은 상대 시각은 requestedAt(한국 시각) 기준 — 기준 시각 필드를 따로 두지 않음. 검색은 regenerate 항상 false.
   새 필드는 끝/중간에 추가했지만 JSON은 이름으로 읽으므로 호환 (이전 메시지 = null). 단 **레코드 전체 생성자를 직접 쓰는 테스트는 인자 추가 필요**.
+- 챗봇(C1, 2026-11-19): LlmRequestType.CHAT + 요청 필드 chat(ChatInput: message ≤ 500, history ≤ 10턴 — ChatTurn(question, answer)),
+  결과 필드 chatReply(ChatReply: text ≤ 2000). **CHAT은 requestedBy ≥ 1만**(생성자 검사) — "내 쿠폰"을 조회하는 기능이라 비로그인 0 금지,
+  C2에서 requestedBy가 mcp-server X-Mcp-User-Id가 된다(누구인지는 문장이 아니라 JWT). 새 필드는 두 레코드의 **끝**에 추가(기존 생성자 인자 순서 유지).
+  COMPLETED는 candidates / searchFilter / chatReply 중 정확히 하나. regenerate·cached는 챗봇에서 항상 false.
+  enum 값 추가라 **llm-service부터 배포** — 컨테이너로 띄우면 `--build` 필수(구버전은 CHAT을 못 읽어 DLT → 60초 후 TIMEOUT).
 - LlmContractJsonTest: 왕복 직렬화, **필드 이름 고정**(바꾸면 실패 — 의도한 변경이면 버전과 함께 고친다), 고정 JSON 읽기,
   모르는 필드 무시(FAIL_ON_UNKNOWN_PROPERTIES=true인 엄격한 mapper로 검증), 빠진 선택 필드 기본값, 규칙 위반 거절.
 
@@ -617,6 +626,10 @@ llm-requests ─▶ LlmRequestConsumer (그룹 llm-service, concurrency 2 = 동�
   | 자연어 검색 | FakeEventSearch — 정해진 표현만 인식, 나머지 단어 → keywords | event-search.v1.txt + EventSearchOutput → EventSearchOutputValidator |
   fake 토큰은 글자 수로 흉내(예산 로직 검증용), app.llm.fake.delay로 응답 지연(로컬 화면 확인용). fake 결과는 품질이 아니라 흐름 확인용 —
   사용자에게 설명할 때 이 구분을 분명히 한다. 같은 설명이 README "2-1. LLM 서비스"와 LlmClient 주석에도 있다 (바꾸면 셋 다).
+- 챗봇(CHAT, C1): 처리기가 LlmClient 대신 **chat/ChatResponder**에 맡긴다 — C1은 PlaceholderChatResponder(임시 고정 답변, 토큰 0, 제공자와 무관).
+  C2에서 tool use 루프(ChatOrchestrator)로 바꾼다(LlmClient의 한 번 호출 모양이 아니라서 인터페이스를 따로 둠).
+  **챗봇은 응답 캐시를 읽지도 쓰지도 않는다** — 답이 지난 대화·"내 쿠폰"처럼 사람·시점마다 다른 조회에 기대서, 같은 문장에 같은 답을 주면 남의 정보가 샐 수 있다.
+  예산 확인·사용량 기록·멱등(llm:done)·마감 건너뛰기는 다른 기능과 같다 (CostControlFlowTest 챗봇 2개).
 - 테스트(LlmRequestFlowTest): Kafka·Redis 컨테이너만. coupon-api 대신 llm-requests 발행, llm-results 직접 읽기.
   @MockitoSpyBean FakeLlmClient로 호출 횟수 검증 (재전달 1회, 만료·모르는 버전·처리 중·DLT는 0회).
   "처리하지 않음" 검증은 같은 키(=같은 파티션)로 표시용 요청을 뒤에 보내 그 결과가 오면 앞의 것도 처리된 것으로 본다 (sleep 없이).
@@ -710,6 +723,30 @@ GET /api/coupons/search/{id} → PENDING / COMPLETED(AI 조건 filter + DB 결�
 - 테스트: EventSearchApiTest(접수·PENDING·회원별 한도·400 / COMPLETED·빈 조건·관리자 조회 / LLM 실패·TIMEOUT·예산·한도 fallback / 404),
   CouponSearchTest(정렬·부분 일치·ALL/ANY·이스케이프·상태·기간 경계·Redis 재고·AND), KeywordQueryTest.
 - 테스트 메모: 고정 날짜로 Redis 적재하는 테스트는 키 만료(종료 + 7일, 절대 시각)가 지나면 깨진다 — RedisCouponStockTest가 2026-11-13에 깨져 현재 시각 기준으로 바꿈.
+
+### 챗봇 대화 (7단계 C1, coupon-api) — com.couponrush.chat, V8 chat_sessions / chat_turns
+```
+POST /api/chat/sessions → 201 대화방     GET /api/chat/sessions → 내 대화방 20개(최근 순, title = 첫 질문 30자)
+GET  /api/chat/sessions/{id} → 대화방 + 최근 턴 50개(오래된 것부터)
+POST /api/chat/sessions/{id}/turns {message 1~500} (한 트랜잭션)
+  ① 대화방 행 잠금(FOR UPDATE) + 소유자 확인(남의 방 404) → ② 최근 턴이 PENDING이면 409 CHAT_TURN_IN_PROGRESS
+  ③ 예산(LlmBudgetGuard) → 챗봇 한도(llm:chat-rate:{userId}, 분 5·일 50) → ④ llm_requests PENDING(CHAT, 마감 60초) + chat_turns 저장 → 커밋
+  ⑤ 커밋 후 llm-requests 발행(실패면 요청 FAILED(PUBLISH_FAILED) + 503 CHAT_UNAVAILABLE, 턴은 실패로 남음) → 202 PENDING 턴 + Location
+GET  /api/chat/sessions/{id}/turns/{turnId} → PENDING / COMPLETED(answer) / FAILED(failureReason, retryable). 마감 지난 PENDING은 그 자리에서 TIMEOUT
+```
+- **턴 = 질문 + LLM 요청 하나**(chat_turns.llm_request_id UNIQUE FK). 답·상태·실패 사유·토큰은 llm_requests에만 — 답을 따로 저장하면
+  결과 도착·타임아웃·늦은 결과·중복 결과마다 두 테이블이 어긋날 수 있어서. 결과 반영은 기존 LlmResultHandler 그대로(result = {"text"}).
+- 왜 접수를 한 트랜잭션으로: 요청 행과 턴이 함께 생기거나 함께 없어야 하고, 발행은 커밋 뒤(결과가 행보다 먼저 오면 버려짐).
+  그래서 LlmRequestService를 prepareChat(예산·한도·PENDING 저장, 호출자 트랜잭션 참여) / publish(커밋 후)로 나눴다.
+- 방마다 기다리는 질문 1개: 답이 섞이거나 직전 답이 history에서 빠진 채 처리되지 않게. 동시 요청은 대화방 행 잠금으로 직렬화(동시 2개 → 202 + 409 테스트).
+  답이 안 오면 마감(60초) 뒤 TIMEOUT이 되어 다시 질문할 수 있다. 다른 방은 막지 않는다.
+- history = 답을 받은(COMPLETED) 최근 턴 최대 10개, 오래된 것부터 (최근 20턴을 살펴봄). 실패·대기 턴은 빼고 화면에는 보여 준다.
+- 에러 코드는 챗봇용으로 바꿔 준다(CHAT_RATE_LIMITED / CHAT_DAILY_LIMIT_EXCEEDED / CHAT_BUDGET_EXCEEDED / CHAT_UNAVAILABLE) — 공통 LLM 코드 메시지가 "문구 생성" 기준이라.
+  다시 보내기 = 새 턴(같은 턴을 재처리하지 않음). 프론트 메시지(api/errors.ts)는 C4에서.
+- chat_sessions.user_id는 FK + ON DELETE CASCADE(대화는 회원 것), chat_turns → chat_sessions CASCADE, chat_turns → llm_requests는 RESTRICT.
+  **테스트 정리 순서: chat_sessions → llm_requests → users** (턴이 남아 있으면 llm_requests를 못 지운다).
+- 설정 app.llm.chat.{request-timeout 60s, per-minute 5, per-day 50} (환경변수 없음). 구조 규칙(ArchitectureTest): chat → llm은 허용, chat → search 금지, coupon·llm → chat 금지.
+- 남은 것: 대화방 삭제·이름 바꾸기 없음, 오래된 대화 정리 없음, 대화방 수 상한 없음(한도로만 묶임).
 
 ### MCP 서버 (7단계 B1·B2) — backend/mcp-server, com.couponrush.mcpserver, 포트 8082
 ```

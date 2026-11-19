@@ -73,7 +73,8 @@ cd backend
 
 ### 2-1. (선택) LLM 서비스: llm-service (8081)
 
-관리자 **이벤트 문구 생성**을 쓸 때만 띄웁니다. 없어도 다른 기능은 모두 동작하고, 문구 생성 요청만 60초 뒤 실패(TIMEOUT)합니다.
+관리자 **이벤트 문구 생성**·챗봇을 쓸 때만 띄웁니다. 없어도 다른 기능은 모두 동작하고, 문구 생성·챗봇 질문만 60초 뒤 실패(TIMEOUT)합니다
+(자연어 검색은 15초 뒤 키워드 검색으로 대신합니다).
 기본은 **fake 제공자**(API 키·비용 없음, 입력으로 정해진 문구 3개)입니다. 실제 Claude를 쓰려면 `infra/.env`에
 `LLM_PROVIDER=anthropic`과 `LLM_API_KEY=...`를 넣고 다시 띄웁니다 (호출마다 비용이 듭니다).
 
@@ -85,6 +86,7 @@ cd backend
 |---|---|---|
 | 이벤트 문구 생성 | `FakeLlmClient.generateEventCopy` — 톤별 고정 문장에 키워드·수량·기간을 끼워 넣음 | `prompts/event-copy.v1.txt` + `EventCopyOutput` / `EventCopyOutputValidator` |
 | 자연어 검색 | `FakeEventSearch` — 정해진 표현만 인식("진행 중", "남은", "이번 주 끝나는" 등), 나머지 단어 → keywords. 처음 보는 표현은 이해하지 못함 | `prompts/event-search.v1.txt` + `EventSearchOutput` / `EventSearchOutputValidator` |
+| 챗봇 (7단계 C, 진행 중) | 지금은 제공자와 상관없이 `chat/PlaceholderChatResponder`가 **임시 고정 답변**("받은 질문: …")만 합니다. C2에서 도구를 쓰는 챗봇으로 바뀝니다 | (C2에서 추가) |
 
 (파일 위치: `backend/llm-service/src/main/java/com/couponrush/llmservice/client/`, 프롬프트는 `.../src/main/resources/prompts/`)
 어느 제공자든 결과는 같은 계약 형식으로 나가므로 coupon-api는 차이를 모릅니다. 기동 로그의 `LLM 제공자: fake` / `anthropic`으로 어느 쪽인지 확인할 수 있습니다.

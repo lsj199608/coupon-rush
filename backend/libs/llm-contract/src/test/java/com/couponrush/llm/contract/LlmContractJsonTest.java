@@ -80,7 +80,7 @@ class LlmContractJsonTest {
 
             assertThat(fieldNames(json)).containsExactlyInAnyOrder(
                     "schemaVersion", "requestId", "type", "requestedBy", "requestedAt", "deadline", "regenerate",
-                    "eventCopy", "eventSearch");
+                    "eventCopy", "eventSearch", "chat");
             assertThat(fieldNames(json.get("eventCopy"))).containsExactlyInAnyOrder(
                     "keywords", "tone", "totalQuantity", "issueStartAt", "issueEndAt");
             assertThat(json.get("requestId").asText()).isEqualTo(REQUEST_ID.toString());
@@ -202,7 +202,7 @@ class LlmContractJsonTest {
 
             assertThat(fieldNames(json)).containsExactlyInAnyOrder(
                     "schemaVersion", "requestId", "status", "candidates", "searchFilter", "failureReason", "model",
-                    "inputTokens", "outputTokens", "cached", "latencyMs", "completedAt");
+                    "inputTokens", "outputTokens", "cached", "latencyMs", "completedAt", "chatReply");
             assertThat(fieldNames(json.get("candidates").get(0))).containsExactlyInAnyOrder("name", "description");
         }
 
@@ -225,7 +225,7 @@ class LlmContractJsonTest {
         @Test
         void 상태와_내용이_맞지_않으면_거절한다() {
             assertThatThrownBy(() -> new LlmResultMessage(1, REQUEST_ID, LlmResultStatus.FAILED, List.of(), null, null,
-                    null, 0, 0, false, 0, completedAt))
+                    null, 0, 0, false, 0, completedAt, null))
                     .as("FAILED 인데 사유 없음").isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> LlmResultMessage.completed(REQUEST_ID, List.of(), "fake", 0, 0, false, 0, completedAt))
                     .as("COMPLETED 인데 후보 없음").isInstanceOf(IllegalArgumentException.class);
@@ -234,7 +234,7 @@ class LlmContractJsonTest {
             assertThatThrownBy(() -> LlmResultMessage.completed(REQUEST_ID, four, "fake", 0, 0, false, 0, completedAt))
                     .as("후보가 너무 많음").isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> new LlmResultMessage(1, REQUEST_ID, LlmResultStatus.COMPLETED, candidates(), null,
-                    LlmFailureReason.TIMEOUT, "fake", 0, 0, false, 0, completedAt))
+                    LlmFailureReason.TIMEOUT, "fake", 0, 0, false, 0, completedAt, null))
                     .as("COMPLETED 인데 사유 있음").isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> LlmResultMessage.failed(REQUEST_ID, LlmFailureReason.TIMEOUT, null, -1, 0, 0, completedAt))
                     .as("음수 토큰").isInstanceOf(IllegalArgumentException.class);
@@ -355,23 +355,23 @@ class LlmContractJsonTest {
             EventSearchInput search = new EventSearchInput("커피");
 
             assertThatThrownBy(() -> new LlmRequestMessage(1, REQUEST_ID, LlmRequestType.EVENT_SEARCH, 7L,
-                    REQUESTED_AT, DEADLINE, false, null, null))
+                    REQUESTED_AT, DEADLINE, false, null, null, null))
                     .as("검색인데 입력 없음").isInstanceOf(IllegalArgumentException.class).hasMessageContaining("eventSearch");
             assertThatThrownBy(() -> new LlmRequestMessage(1, REQUEST_ID, LlmRequestType.EVENT_SEARCH, 7L,
-                    REQUESTED_AT, DEADLINE, false, input(), search))
+                    REQUESTED_AT, DEADLINE, false, input(), search, null))
                     .as("입력이 둘 다 있음 — 어느 쪽을 처리할지 모호").isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> new LlmRequestMessage(1, REQUEST_ID, LlmRequestType.EVENT_COPY, 7L,
-                    REQUESTED_AT, DEADLINE, false, input(), search))
+                    REQUESTED_AT, DEADLINE, false, input(), search, null))
                     .as("문구 생성에 검색 입력").isInstanceOf(IllegalArgumentException.class);
         }
 
         @Test
         void 성공_결과는_후보와_검색_조건_중_정확히_하나만_가진다() {
             assertThatThrownBy(() -> new LlmResultMessage(1, REQUEST_ID, LlmResultStatus.COMPLETED, candidates(), filter(),
-                    null, "fake", 0, 0, false, 0, completedAt))
+                    null, "fake", 0, 0, false, 0, completedAt, null))
                     .as("둘 다 있음").isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> new LlmResultMessage(1, REQUEST_ID, LlmResultStatus.FAILED, List.of(), filter(),
-                    LlmFailureReason.TIMEOUT, null, 0, 0, false, 0, completedAt))
+                    LlmFailureReason.TIMEOUT, null, 0, 0, false, 0, completedAt, null))
                     .as("FAILED 인데 검색 조건 있음").isInstanceOf(IllegalArgumentException.class);
         }
 
@@ -397,6 +397,96 @@ class LlmContractJsonTest {
                     .as("종료 범위 뒤집힘").isInstanceOf(IllegalArgumentException.class);
             assertThat(new EventSearchFilter(null, null, t, null, null, t, false).startFrom())
                     .as("한쪽만 있는 범위는 허용").isEqualTo(t);
+        }
+    }
+
+    @Nested
+    class 챗봇 {
+
+        private final Instant completedAt = REQUESTED_AT.plusSeconds(3);
+
+        private ChatInput chatInput() {
+            return new ChatInput("내가 받은 쿠폰 보여줘", List.of(new ChatTurn("커피 이벤트 있어?", "커피 할인 이벤트가 1개 있어요.")));
+        }
+
+        @Test
+        void 요청을_JSON_으로_바꿨다_되돌리면_같고_필드_이름이_고정돼_있다() throws Exception {
+            LlmRequestMessage original = LlmRequestMessage.chat(REQUEST_ID, 7L, REQUESTED_AT, DEADLINE, chatInput());
+
+            String json = mapper.writeValueAsString(original);
+
+            assertThat(mapper.readValue(json, LlmRequestMessage.class)).isEqualTo(original);
+            JsonNode chat = mapper.readTree(json).get("chat");
+            assertThat(fieldNames(chat)).containsExactlyInAnyOrder("message", "history");
+            assertThat(fieldNames(chat.get("history").get(0))).containsExactlyInAnyOrder("question", "answer");
+            assertThat(original.regenerate()).as("챗봇은 캐시하지 않으므로 다시 생성 개념이 없다").isFalse();
+        }
+
+        @Test
+        void 고정된_JSON_을_읽는다_history_가_없으면_빈_목록() throws Exception {
+            String json = """
+                    {"schemaVersion":1,"requestId":"0f8e2a5c-1b3d-4e6f-8a9b-0c1d2e3f4a5b","type":"CHAT",
+                     "requestedBy":7,"requestedAt":"2030-01-01T00:00:00Z","deadline":"2030-01-01T00:01:00Z",
+                     "chat":{"message":"안녕"}}
+                    """;
+
+            LlmRequestMessage message = mapper.readValue(json, LlmRequestMessage.class);
+
+            assertThat(message.chat().message()).isEqualTo("안녕");
+            assertThat(message.chat().history()).isEmpty();
+        }
+
+        @Test
+        void 비로그인_챗봇_요청은_만들_수_없다() {
+            // 챗봇은 "내 쿠폰"을 조회할 수 있어 누구인지가 반드시 필요하다 (검색의 비로그인 0 과 다름)
+            assertThatThrownBy(() -> LlmRequestMessage.chat(REQUEST_ID, 0L, REQUESTED_AT, DEADLINE, chatInput()))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("requestedBy");
+        }
+
+        @Test
+        void 챗봇_요청에는_챗봇_입력만_있어야_한다() {
+            assertThatThrownBy(() -> new LlmRequestMessage(1, REQUEST_ID, LlmRequestType.CHAT, 7L,
+                    REQUESTED_AT, DEADLINE, false, null, null, null))
+                    .as("입력 없음").isInstanceOf(IllegalArgumentException.class).hasMessageContaining("chat");
+            assertThatThrownBy(() -> new LlmRequestMessage(1, REQUEST_ID, LlmRequestType.CHAT, 7L,
+                    REQUESTED_AT, DEADLINE, false, null, new EventSearchInput("커피"), chatInput()))
+                    .as("검색 입력도 있음").isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new LlmRequestMessage(1, REQUEST_ID, LlmRequestType.EVENT_SEARCH, 7L,
+                    REQUESTED_AT, DEADLINE, false, null, new EventSearchInput("커피"), chatInput()))
+                    .as("검색 요청에 챗봇 입력").isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void 답변_결과는_답변만_가진다() throws Exception {
+            LlmResultMessage message = LlmResultMessage.chatCompleted(
+                    REQUEST_ID, new ChatReply("받은 쿠폰은 2개예요."), "fake", 10, 20, 5, completedAt);
+
+            LlmResultMessage restored = mapper.readValue(mapper.writeValueAsString(message), LlmResultMessage.class);
+
+            assertThat(restored).isEqualTo(message);
+            assertThat(fieldNames(mapper.readTree(mapper.writeValueAsString(message)).get("chatReply"))).containsExactly("text");
+            assertThat(restored.cached()).isFalse();
+            assertThatThrownBy(() -> new LlmResultMessage(1, REQUEST_ID, LlmResultStatus.COMPLETED, candidates(), null, null,
+                    "fake", 0, 0, false, 0, completedAt, new ChatReply("답")))
+                    .as("후보와 답변이 함께").isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new LlmResultMessage(1, REQUEST_ID, LlmResultStatus.FAILED, List.of(), null,
+                    LlmFailureReason.TIMEOUT, null, 0, 0, false, 0, completedAt, new ChatReply("답")))
+                    .as("FAILED 인데 답변").isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void 길이와_개수를_제한한다() {
+            assertThatThrownBy(() -> new ChatInput(" ", List.of())).as("빈 질문").isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new ChatInput("가".repeat(ChatInput.MESSAGE_MAX + 1), List.of()))
+                    .as("긴 질문").isInstanceOf(IllegalArgumentException.class);
+            List<ChatTurn> tooMany = new ArrayList<>();
+            for (int i = 0; i <= ChatInput.HISTORY_MAX; i++) {
+                tooMany.add(new ChatTurn("질문" + i, "답" + i));
+            }
+            assertThatThrownBy(() -> new ChatInput("질문", tooMany)).as("지난 턴이 너무 많음").isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new ChatReply("가".repeat(ChatReply.TEXT_MAX + 1))).as("긴 답변").isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new ChatTurn("질문", " ")).as("답 없는 턴").isInstanceOf(IllegalArgumentException.class);
+            assertThat(new ChatInput("질문", null).history()).isEmpty();
         }
     }
 

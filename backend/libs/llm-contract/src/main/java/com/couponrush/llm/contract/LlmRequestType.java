@@ -8,5 +8,10 @@ public enum LlmRequestType {
      * 자연어 이벤트 검색 — 입력은 {@link LlmRequestMessage#eventSearch()}, 결과는 {@link LlmResultMessage#searchFilter()}.
      * 값을 추가했으므로 소비자(llm-service)부터 배포한다 (구버전 소비자는 이 값을 못 읽어 DLT 로 보낸다)
      */
-    EVENT_SEARCH
+    EVENT_SEARCH,
+    /**
+     * 챗봇 질문 (7단계 C) — 입력은 {@link LlmRequestMessage#chat()}, 결과는 {@link LlmResultMessage#chatReply()}.
+     * 로그인한 회원만 (requestedBy ≥ 1, 생성자가 검사). 소비자(llm-service)부터 배포한다
+     */
+    CHAT
 }
