@@ -502,7 +502,7 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 #### 자연어 검색 (7단계 A4, pages/EventListPage + hooks/useEventSearch + api/search)
 ```
 검색창 [검색] → URL ?q=질문 (공백 정리, 비우면 q 제거 = 전체 목록)
-  useQuery ['event-search', q]: POST /api/coupons/search (재시도 없음, 5분 재사용 — 상세 → 뒤로 와도 다시 접수 안 함)
+  useQuery ['event-search','query',q]: POST /api/coupons/search (재시도 없음, 5분 재사용 — 상세 → 뒤로 와도 다시 접수 안 함)
    ├ FALLBACK → 키워드 검색 결과 + 이유 안내(searchFallbackMessage) + 단어 칩
    └ PENDING  → useQuery ['event-search','request',id] 1초 폴링 → COMPLETED(AI 조건 칩 + 결과) / FALLBACK
                  화면 대기 25초(서버 마감 15초 + 여유) 넘게 PENDING → "다시 검색" / 접수·조회 실패 → 에러 + [다시 검색]
