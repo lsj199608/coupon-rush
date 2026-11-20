@@ -182,6 +182,19 @@ Start-Sleep 2; Invoke-RestMethod "http://localhost:8080/api/chat/sessions/$($s.s
 | I6 | Redis `--scan --pattern "llm:*rate*"` | `llm:chat-rate:{회원}`, `llm:search-rate:{user:회원}` — 챗봇 검색도 회원별, `ip:` 키 없음 |
 | I7 | mcp-server 끄고 "내 쿠폰 보여줘" | 바로 FAILED / LLM_UNAVAILABLE / retryable=true, 다른 API(GET /api/coupons) 정상 |
 
+### J. 챗봇 창 (7단계 C4 — 브라우저)
+
+준비: I와 같음 (bootRun 3개) + `npm run dev`, 로그인.
+
+| # | 조작 | 기대 |
+|---|---|---|
+| J1 | 헤더 [AI 챗봇] → "내 쿠폰 보여줘" | 답을 쓰는 중 표시 → [내 쿠폰] 화면과 같은 목록 |
+| J2 | "진행 중인 커피 쿠폰 있어?" → 답 속 링크 클릭 | 이벤트 상세로 이동, 창 닫힘 |
+| J3 | "커피 쿠폰 발급해줘" | 발급 없이 이벤트 링크로 안내 |
+| J4 | 모바일 폭(기기 툴바) | 창이 전체 화면 |
+
+fake 검색은 정해진 표현만 알아듣는다 — "커피쿠폰"(붙여 쓰기), "진행"(한 단어)은 검색어로 남아 0건이 정상 ("커피 쿠폰", "진행 중인 커피 쿠폰"으로).
+
 ---
 
 ## 3. 문제가 생겼을 때 볼 곳
@@ -216,3 +229,4 @@ Start-Sleep 2; Invoke-RestMethod "http://localhost:8080/api/chat/sessions/$($s.s
 | G 모바일 폭 (G1~G4) |✓ | |
 | H 실제 Claude (선택) | 미실행 | 비용 때문에 생략 — 실제 API 호출은 아직 확인 안 됨 |
 | I 챗봇 (I1~I7) |✓ | 2026-11-19 fake 제공자. bootRun 3개 + PowerShell 스크립트(로컬 JWT). 답 0.8~2.3초, 챗봇 안 검색은 AI 검색 경로(전용 토픽 효과) |
+| J 챗봇 창 (J1~J4) |✓ | 2026-11-20 브라우저 확인. fake 검색 한계("커피쿠폰"·"진행" 0건)는 고치지 않기로 |
