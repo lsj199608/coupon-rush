@@ -36,7 +36,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 4. Redis로 재고 차감 개선 + 동시성 테스트
 5. Kafka 비동기 처리
 6. React 화면 연동
-7. LLM 기능 (이벤트 문구 생성 → 자연어 검색 → 챗봇)
+7. LLM 기능 (이벤트 문구 생성 → 자연어 검색 → 챗봇) + WebSocket 채팅방(D)
+8. Spring Batch (종료된 이벤트 결과 집계)
 
 ## 진행 상황
 작업 단계가 끝날 때마다 이 섹션을 갱신하고 함께 커밋한다. (여러 PC에서 이어서 작업하기 위함)
@@ -166,6 +167,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
     - [ ] D3) scale-out: Redis pub/sub으로 인스턴스 간 전달 — web-chat-service 2대 테스트(A 접속자 메시지가 B 접속자에게)
     - [ ] D4) 프론트: 이벤트 상세 화면 채팅 패널(@stomp/stompjs, 자동 재연결), Vite 프록시 ws: true. 브라우저 창 2개로 수동 확인
     - [ ] D5) (선택) 최근 메시지 50개 Redis 보관(입장 시 표시), 남은 수량 실시간 푸시(상세 3초 폴링 대체)
+    - [ ] D6) 대화 저장: web-chat-service **자기 DB** — 같은 Postgres 서버(컨테이너) 안에 데이터베이스 `web_chat` + 전용 계정,
+          web-chat-service가 자기 Flyway로 테이블 관리. coupon_rush 에는 접근하지 않음("서비스마다 자기 DB" 첫 사례). 2026-11-22 결정 — 아래 "대화 저장 계획 (D6)"
+- [ ] 8. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. D2~D4 다음에 시작. 아래 "Spring Batch 계획 (E)"
 
 ## 결정 사항 / 메모
 
@@ -893,6 +897,51 @@ MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Sessio
 - **브로커**: 서버 안은 STOMP 단순 브로커, 서버 간은 Redis pub/sub을 직접 연결 — RabbitMQ 릴레이를 쓰면 scale-out 문제가 숨겨지므로 학습 목적상 직접 다룬다.
 - 보호: 메시지 크기 상한, 사용자별 도배 제한, 느린 클라이언트(전송 버퍼·시간 제한), 보낸 사람은 서버가 채움. 발급 기능과 무관(조회·대화만).
 - 챗봇(C)과 구분: 챗봇은 서버 → 브라우저 한 방향 푸시라 SSE가 더 단순하다. WebSocket은 사람끼리 양방향 대화에 쓴다.
+
+### 대화 저장 계획 (D6, 2026-11-22 결정 — 미구현)
+- **원칙: 서비스마다 자기 데이터(database per service)**. 나누는 수준은 "같은 서버, 데이터베이스를 따로"
+  (DB 서버를 따로 두지 않음 — 비용·로컬 환경 단순. 서버 분리는 트래픽·장애 격리가 필요할 때).
+  핵심은 물리 분리가 아니라 **다른 서비스 데이터를 직접 읽지 않고 API·이벤트로만** 받는 것.
+- 구성: 같은 Postgres 컨테이너에 데이터베이스 `web_chat` + 전용 계정(web_chat DB에만 권한). web-chat-service가 자기 Flyway·자기 DataSource.
+  coupon-api의 coupon_rush 에는 접근하지 않고, coupon-api도 web_chat 에 접근하지 않는다.
+  새 env(접속 정보·비밀번호) → infra/.env.example·README 환경변수 표 갱신. 데이터베이스·계정 생성은 Postgres 초기화 스크립트(docker-entrypoint-initdb.d) —
+  **기존 볼륨에서는 초기화 스크립트가 돌지 않으므로** 수동 생성 절차도 문서화.
+- 테이블(안): web_chat_messages(id, event_id, message_id UUID UNIQUE, sender_id, sender_nickname, content, sent_at), 인덱스 (event_id, id).
+  회원 FK 없음 — users는 coupon-api 소유라 JOIN 불가 → **보낼 때의 닉네임을 복사**해 둔다(지금 메시지에 senderNickname이 있는 이유).
+- 저장 때문에 전송이 느려지지 않게: 먼저 방에 뿌리고 모아서 비동기 저장(실패 시 로그·재시도). 저장 실패가 대화를 막지 않는다.
+- 조회: 입장 시 방의 최근 N개 + 이전 페이지(id 기준 커서). D5의 Redis 최근 50개와 역할 정리 필요(둘 다 두거나 DB만).
+- 보관 기간·삭제: 채팅 내용은 개인정보 → 보관 기간(예: 이벤트 종료 후 30일) 정하고 정리 작업(Spring Batch 연습 후보), 신고·삭제는 나중.
+- 테스트: Testcontainers Postgres에 web_chat 데이터베이스, 저장·조회·비동기 저장 실패 시 대화 계속.
+
+### Spring Batch 계획 (E, 2026-11-22 결정 — 미구현)
+- **기능: 종료된 이벤트 결과 집계** — 끝난 이벤트마다 발급 이력을 읽어 통계 테이블에 저장
+  (총 발급 수, 오픈 → 소진까지 걸린 시간, 분 단위 발급 추이, 실패 사유별 건수). 관리자 화면 그래프로 표시(선택).
+  배울 것: chunk(묶음 읽기·쓰기), JobParameters(날짜)로 중복 실행 방지, 실패 지점부터 재시작, 다시 돌려도 같은 결과(멱등), 실행 이력.
+  대조 점검(Redis ↔ DB)을 첫 Step으로 넣을지는 세부 설계 때 (넣으면 Redis 키 구조를 몰라도 되게 coupon-api 대조 API 호출 고려).
+- **위치: 별도 모듈 coupon-batch** (현업에서 더 흔한 구조 — api / batch 분리 배포). 이유: 오픈 순간 발급 서버 자원을 나눠 쓰지 않음,
+  API 서버가 여러 대여도 배치는 한 번만, 따로 배포, "실행 → Job → 종료" 프로세스로 실행 이력·재시작이 깔끔.
+- **DB는 coupon-api와 같은 coupon_rush (현업 표준 — 같은 도메인의 API·배치는 DB 공유)**. 배치는 그 서비스 데이터를 읽어 가공하는 일이라
+  DB를 나누면 쿠폰 데이터를 다시 복사해야 한다. DB를 따로 두는 건 규모가 커진 뒤의 선택(읽기 전용 복제본에서 읽기, 분석용 DB·웨어하우스 적재).
+  대신 같은 DB 안에서 **스키마와 계정으로 영역·권한을 나눈다**:
+  ```
+  PostgreSQL 서버 하나
+  ├─ 데이터베이스 coupon_rush
+  │   ├─ 스키마 public ← 주인 coupon-api (업무 테이블 + 통계 테이블, coupon-api Flyway)
+  │   │      coupon-batch: 발급 관련 테이블 읽기만, 통계 테이블 쓰기
+  │   └─ 스키마 batch  ← 주인 coupon-batch (Spring Batch BATCH_* 실행 이력, coupon-batch 자기 Flyway·별도 이력 테이블)
+  └─ 데이터베이스 web_chat ← 주인 web-chat-service (D6)
+  ```
+  - 통계 테이블은 public / coupon-api 소유: 관리자 화면에서 coupon-api가 보여 줄 데이터라서. 배치는 쓰기만.
+  - BATCH_* 는 batch 스키마 / coupon-batch 소유: 쿠폰 업무와 무관한 프레임워크 기록이라 업무 테이블과 섞지 않는다
+    (Flyway 두 개가 같은 DB를 다루되 스키마·이력 테이블이 달라 충돌하지 않음. spring.batch.jdbc.table-prefix = batch.BATCH_).
+  - **배치 전용 DB 계정 coupon_batch**: public 발급 관련 테이블 SELECT만, 통계 테이블 INSERT/UPDATE/DELETE, batch 스키마 전부.
+    배치 버그가 발급 데이터를 바꾸는 사고를 문서 규칙이 아니라 DB 권한으로 막는다. 계정·권한은 Postgres 초기화 스크립트 + 기존 볼륨용 수동 절차,
+    새 env(배치 계정 비밀번호) → infra/.env.example·README 환경변수 표 갱신.
+  - 엔티티 공유 없이 SQL(JdbcCursorItemReader 등)로 접근. llm-service·mcp-server·web-chat-service는 여전히 coupon_rush 에 접근하지 않는다.
+  - E 시작 때 공통 메모의 DB 규칙을 이 내용으로 바꾼다 ("coupon_rush 의 주인은 쿠폰 도메인 = coupon-api + coupon-batch, 영역은 스키마·계정으로").
+  - 비교: **같은 서비스(쿠폰 API·배치)는 DB 공유 + 스키마·권한 구분 / 다른 서비스(채팅, D6)는 데이터베이스 자체를 분리.**
+- 같은 DB를 쓰는 위험과 대비: 스키마 변경에 깨짐(배치 테스트도 coupon-api 마이그레이션을 적용한 DB에서) / 발급 성능 방해(한가한 시간 실행, 작은 chunk·커넥션 풀) /
+  쓰기 충돌(발급 테이블은 계정 권한으로 쓰기 불가) / 규칙 중복(집계에 필요한 규칙만 SQL, 많아지면 coupon-domain 모듈 분리).
 
 ### 채팅 서버 (7단계 D1) — backend/web-chat-service, com.couponrush.webchat, 포트 8083
 ```
