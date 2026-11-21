@@ -52,14 +52,14 @@ public enum ErrorCode {
     EVENT_SEARCH_NOT_FOUND(HttpStatus.NOT_FOUND, "검색 요청을 찾을 수 없습니다."),
 
     // 챗봇 (7단계 C). 남의 대화방·턴은 존재 여부도 숨긴다 (404)
-    CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "대화방을 찾을 수 없습니다."),
-    CHAT_TURN_NOT_FOUND(HttpStatus.NOT_FOUND, "대화를 찾을 수 없습니다."),
+    CHATBOT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "대화방을 찾을 수 없습니다."),
+    CHATBOT_TURN_NOT_FOUND(HttpStatus.NOT_FOUND, "대화를 찾을 수 없습니다."),
     /** 대화방마다 답을 기다리는 질문은 하나만 — 답이 섞이거나 지난 대화(문맥)가 빠진 채 처리되지 않게 */
-    CHAT_TURN_IN_PROGRESS(HttpStatus.CONFLICT, "이전 질문의 답을 기다리는 중입니다. 답이 온 뒤에 다시 보내 주세요."),
-    CHAT_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "질문이 너무 잦습니다. 1분 뒤에 다시 시도해 주세요."),
-    CHAT_DAILY_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 챗봇 질문 횟수를 모두 사용했습니다. 내일 다시 시도해 주세요."),
-    CHAT_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 AI 사용 예산을 모두 사용했습니다. 내일 다시 시도해 주세요."),
-    CHAT_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "질문을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    CHATBOT_TURN_IN_PROGRESS(HttpStatus.CONFLICT, "이전 질문의 답을 기다리는 중입니다. 답이 온 뒤에 다시 보내 주세요."),
+    CHATBOT_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "질문이 너무 잦습니다. 1분 뒤에 다시 시도해 주세요."),
+    CHATBOT_DAILY_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 챗봇 질문 횟수를 모두 사용했습니다. 내일 다시 시도해 주세요."),
+    CHATBOT_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 AI 사용 예산을 모두 사용했습니다. 내일 다시 시도해 주세요."),
+    CHATBOT_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "질문을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.");
 
     private final HttpStatus status;
     private final String message;

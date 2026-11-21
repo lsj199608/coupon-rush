@@ -83,7 +83,7 @@ public class FakeLlmClient implements LlmClient {
         return switch (type) {
             case EVENT_COPY -> "fake:v1";
             case EVENT_SEARCH -> "fake:search.v2";   // v2: 때를 가리키는 말(지금·현재…) 불용어 — 규칙이 바뀌면 올려 예전 캐시를 안 쓴다
-            case CHAT -> throw new IllegalArgumentException("챗봇 답은 캐시하지 않는다 (LlmRequestProcessor)");
+            case CHATBOT -> throw new IllegalArgumentException("챗봇 답은 캐시하지 않는다 (LlmRequestProcessor)");
         };
     }
 

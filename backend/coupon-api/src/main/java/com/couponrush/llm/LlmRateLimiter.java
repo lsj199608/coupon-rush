@@ -60,17 +60,17 @@ public class LlmRateLimiter {
     }
 
     /** 챗봇 질문 한도 (회원별, 문구 생성·검색과 별도 카운터). 넘으면 LLM_RATE_LIMITED / LLM_DAILY_LIMIT_EXCEEDED */
-    public void acquireChat(long userId, Instant now) {
-        acquire(chatDayKey(userId, now), chatMinuteKey(userId, now),
-                properties.chat().perDay(), properties.chat().perMinute());
+    public void acquireChatbot(long userId, Instant now) {
+        acquire(chatbotDayKey(userId, now), chatbotMinuteKey(userId, now),
+                properties.chatbot().perDay(), properties.chatbot().perMinute());
     }
 
-    public String chatDayKey(long userId, Instant now) {
-        return "llm:chat-rate:{" + userId + "}:d:" + DAY.format(zoned(now));
+    public String chatbotDayKey(long userId, Instant now) {
+        return "llm:chatbot-rate:{" + userId + "}:d:" + DAY.format(zoned(now));
     }
 
-    public String chatMinuteKey(long userId, Instant now) {
-        return "llm:chat-rate:{" + userId + "}:m:" + MINUTE.format(zoned(now));
+    public String chatbotMinuteKey(long userId, Instant now) {
+        return "llm:chatbot-rate:{" + userId + "}:m:" + MINUTE.format(zoned(now));
     }
 
     public String searchDayKey(String subject, Instant now) {

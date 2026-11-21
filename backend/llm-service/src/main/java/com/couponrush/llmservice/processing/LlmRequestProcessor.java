@@ -7,8 +7,8 @@ import com.couponrush.llm.contract.LlmResultMessage;
 import com.couponrush.llm.contract.LlmResultStatus;
 import com.couponrush.llm.contract.LlmTopics;
 import com.couponrush.llmservice.LlmServiceProperties;
-import com.couponrush.llmservice.chat.ChatCompletion;
-import com.couponrush.llmservice.chat.ChatResponder;
+import com.couponrush.llmservice.chatbot.ChatbotCompletion;
+import com.couponrush.llmservice.chatbot.ChatbotResponder;
 import com.couponrush.llmservice.client.LlmCallException;
 import com.couponrush.llmservice.client.LlmClient;
 import com.couponrush.llmservice.client.KstDates;
@@ -54,7 +54,7 @@ public class LlmRequestProcessor {
     }
 
     private final LlmClient client;
-    private final ChatResponder chatResponder;
+    private final ChatbotResponder chatbotResponder;
     private final ProcessedRequestStore store;
     private final ResponseCache cache;
     private final UsageLedger usage;
@@ -62,11 +62,11 @@ public class LlmRequestProcessor {
     private final LlmServiceProperties properties;
     private final Clock clock;
 
-    public LlmRequestProcessor(LlmClient client, ChatResponder chatResponder, ProcessedRequestStore store,
+    public LlmRequestProcessor(LlmClient client, ChatbotResponder chatbotResponder, ProcessedRequestStore store,
                                ResponseCache cache, UsageLedger usage,
                                ObjectMapper objectMapper, LlmServiceProperties properties, Clock clock) {
         this.client = client;
-        this.chatResponder = chatResponder;
+        this.chatbotResponder = chatbotResponder;
         this.store = store;
         this.cache = cache;
         this.usage = usage;
@@ -112,11 +112,11 @@ public class LlmRequestProcessor {
      * 캐시를 예산보다 먼저 보는 이유: 캐시 응답은 비용이 0이라 예산을 다 써도 줄 수 있다.
      * (단 이미 소진된 뒤의 새 요청은 coupon-api LlmBudgetGuard 가 접수 단계에서 먼저 막는다 — 여기 오는 것은 접수 후 소진된 경우)
      * <p>
-     * 챗봇(CHAT)은 캐시를 읽지도 쓰지도 않는다 — 답이 지난 대화와 "내 쿠폰"처럼 사람·시점마다 다른 조회 결과에 기대서,
+     * 챗봇(CHATBOT)은 캐시를 읽지도 쓰지도 않는다 — 답이 지난 대화와 "내 쿠폰"처럼 사람·시점마다 다른 조회 결과에 기대서,
      * 같은 문장이라도 다른 사람에게 같은 답을 주면 남의 정보가 샐 수 있다.
      */
     private Processed cachedOrBudgetedOrGenerated(LlmRequestMessage request, Instant now) {
-        boolean cacheable = request.type() != LlmRequestType.CHAT;
+        boolean cacheable = request.type() != LlmRequestType.CHATBOT;
         String cacheKey = cacheable ? cacheKey(request) : null;
 
         if (cacheable && !request.regenerate()) {
@@ -156,7 +156,7 @@ public class LlmRequestProcessor {
             case EVENT_COPY -> ResponseCache.key(client.cacheIdentity(LlmRequestType.EVENT_COPY), request.eventCopy());
             case EVENT_SEARCH -> ResponseCache.key(client.cacheIdentity(LlmRequestType.EVENT_SEARCH), request.eventSearch(),
                     KstDates.dateOf(request.requestedAt()));
-            case CHAT -> throw new IllegalStateException("챗봇 요청은 캐시하지 않는다");
+            case CHATBOT -> throw new IllegalStateException("챗봇 요청은 캐시하지 않는다");
         };
     }
 
@@ -168,7 +168,7 @@ public class LlmRequestProcessor {
                         0, 0, true, elapsedMillis(now), clock.instant());
                 case EVENT_SEARCH -> LlmResultMessage.searchCompleted(request.requestId(), entry.searchFilter(), entry.model(),
                         0, 0, true, elapsedMillis(now), clock.instant());
-                case CHAT -> throw new IllegalStateException("챗봇 요청은 캐시하지 않는다");
+                case CHATBOT -> throw new IllegalStateException("챗봇 요청은 캐시하지 않는다");
             });
         } catch (RuntimeException e) {
             log.warn("캐시 값을 쓸 수 없음 — 새로 생성: requestId={}, type={}, reason={}",
@@ -190,9 +190,9 @@ public class LlmRequestProcessor {
                     yield LlmResultMessage.searchCompleted(request.requestId(), c.filter(), c.model(),
                             c.inputTokens(), c.outputTokens(), false, elapsedMillis(startedAt), clock.instant());
                 }
-                case CHAT -> {
-                    ChatCompletion c = chatResponder.answer(request.requestedBy(), request.chat(), request.requestedAt(), request.deadline());
-                    yield LlmResultMessage.chatCompleted(request.requestId(), c.reply(), c.model(),
+                case CHATBOT -> {
+                    ChatbotCompletion c = chatbotResponder.answer(request.requestedBy(), request.chatbot(), request.requestedAt(), request.deadline());
+                    yield LlmResultMessage.chatbotCompleted(request.requestId(), c.reply(), c.model(),
                             c.inputTokens(), c.outputTokens(), elapsedMillis(startedAt), clock.instant());
                 }
             };

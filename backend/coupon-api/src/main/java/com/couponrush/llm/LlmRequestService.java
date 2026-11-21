@@ -2,8 +2,8 @@ package com.couponrush.llm;
 
 import com.couponrush.global.error.BusinessException;
 import com.couponrush.global.error.ErrorCode;
-import com.couponrush.llm.contract.ChatInput;
-import com.couponrush.llm.contract.ChatReply;
+import com.couponrush.llm.contract.ChatbotInput;
+import com.couponrush.llm.contract.ChatbotReply;
 import com.couponrush.llm.contract.EventCopyCandidate;
 import com.couponrush.llm.contract.EventCopyInput;
 import com.couponrush.llm.contract.EventSearchFilter;
@@ -115,31 +115,31 @@ public class LlmRequestService {
 
     /**
      * 챗봇 질문의 <b>접수 준비</b>: 예산 → 한도 → PENDING 저장까지만 하고 발행하지 않는다 (발행은 {@link #publish}).
-     * 둘을 나눈 이유: 챗봇은 PENDING 행과 대화 턴(chat_turns)을 <b>한 트랜잭션으로</b> 저장해야 하고, 발행은 그 커밋 뒤여야 한다
+     * 둘을 나눈 이유: 챗봇은 PENDING 행과 대화 턴(chatbot_turns)을 <b>한 트랜잭션으로</b> 저장해야 하고, 발행은 그 커밋 뒤여야 한다
      * (커밋 전에 발행하면 결과가 행보다 먼저 와서 버려진다 — 이 클래스의 순서 규칙과 같은 이유).
      * 그래서 이 메서드는 호출하는 쪽의 트랜잭션 안에서 불러야 한다 (저장이 그 트랜잭션에 참여한다).
      * 한도·예산 거절은 문구 생성과 같은 BusinessException 이다 — 챗봇용 에러 코드로 바꾸는 것은 호출하는 쪽.
      */
-    public LlmRequestMessage prepareChat(long userId, ChatInput input) {
+    public LlmRequestMessage prepareChatbot(long userId, ChatbotInput input) {
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         budgetGuard.checkRemaining(now);
-        rateLimiter.acquireChat(userId, now);
+        rateLimiter.acquireChatbot(userId, now);
 
         UUID requestId = UUID.randomUUID();
-        Instant deadline = now.plus(properties.chat().requestTimeout());
-        LlmRequestMessage message = LlmRequestMessage.chat(requestId, userId, now, deadline, input);
-        repository.save(LlmRequest.pending(requestId, LlmRequestType.CHAT, userId, toJson(input), now, deadline));
+        Instant deadline = now.plus(properties.chatbot().requestTimeout());
+        LlmRequestMessage message = LlmRequestMessage.chatbot(requestId, userId, now, deadline, input);
+        repository.save(LlmRequest.pending(requestId, LlmRequestType.CHATBOT, userId, toJson(input), now, deadline));
         return message;
     }
 
     /**
      * 챗봇 요청들을 한 번에 읽는다 (대화방의 턴 목록). 마감이 지난 PENDING 은 이 자리에서 TIMEOUT 으로 확정한 뒤의 상태를 준다.
-     * 소유자 확인은 하지 않는다 — 대화방 소유자를 확인한 호출자(ChatService)가 그 방의 요청 ID 만 넘긴다.
+     * 소유자 확인은 하지 않는다 — 대화방 소유자를 확인한 호출자(ChatbotService)가 그 방의 요청 ID 만 넘긴다.
      */
-    public Map<UUID, LlmRequest> getChats(Collection<UUID> requestIds) {
+    public Map<UUID, LlmRequest> getChatbotRequests(Collection<UUID> requestIds) {
         Instant now = clock.instant();
         Map<UUID, LlmRequest> found = repository.findAllById(requestIds).stream()
-                .filter(request -> request.getType() == LlmRequestType.CHAT)
+                .filter(request -> request.getType() == LlmRequestType.CHATBOT)
                 .collect(Collectors.toMap(LlmRequest::getRequestId, Function.identity()));
         found.replaceAll((id, request) -> request.isExpiredPending(now) && repository.timeoutIfExpired(id, now) == 1
                 ? repository.findById(id).orElseThrow()
@@ -148,8 +148,8 @@ public class LlmRequestService {
     }
 
     /** COMPLETED 챗봇 요청의 답변 */
-    public ChatReply chatReplyOf(LlmRequest request) {
-        return readJson(request.getResult(), ChatReply.class, request);
+    public ChatbotReply chatbotReplyOf(LlmRequest request) {
+        return readJson(request.getResult(), ChatbotReply.class, request);
     }
 
     /**

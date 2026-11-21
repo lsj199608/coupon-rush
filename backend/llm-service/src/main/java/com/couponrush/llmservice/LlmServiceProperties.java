@@ -14,7 +14,7 @@ import java.time.Duration;
  * @param fake            fake 제공자 설정
  * @param anthropic       Anthropic(Claude) 제공자 설정
  * @param circuitBreaker  제공자 장애 시 호출을 잠시 끊는 설정
- * @param chat            챗봇 (7단계 C2) — 도구 호출 반복의 상한과 mcp-server 연결
+ * @param chatbot            챗봇 (7단계 C2) — 도구 호출 반복의 상한과 mcp-server 연결
  */
 @ConfigurationProperties("app.llm")
 public record LlmServiceProperties(
@@ -26,7 +26,7 @@ public record LlmServiceProperties(
         @DefaultValue CircuitBreaker circuitBreaker,
         @DefaultValue Budget budget,
         @DefaultValue Cache cache,
-        @DefaultValue Chat chat) {
+        @DefaultValue Chatbot chatbot) {
 
     /**
      * 일일 토큰 예산 (전체 서비스 합계, 한국 자정 초기화). 사용량은 Redis llm:usage:{yyyyMMdd} 에 기록한다.
@@ -48,7 +48,7 @@ public record LlmServiceProperties(
     /**
      * 챗봇. 질문 하나 = 모델 호출 여러 번 + 도구 호출 여러 번이라, 비용·시간 상한을 질문 단위로 둔다.
      *
-     * @param concurrency    챗봇 전용 컨슈머 스레드 수 (llm-chat-requests)
+     * @param concurrency    챗봇 전용 컨슈머 스레드 수 (llm-chatbot-requests)
      * @param maxToolCalls   질문 하나에서 부를 수 있는 도구 수. 넘으면 도구를 끄고 지금까지 결과로 답하게 한다
      * @param turnTokenCap   질문 하나의 토큰 상한(입력+출력, 모든 호출 합). 넘으면 도구를 끄고 마지막 답 1회 —
      *                       그래서 실제 최대치는 상한 + 호출 1회분이다 (중간에 끊으면 답 없이 비용만 남는다)
@@ -56,7 +56,7 @@ public record LlmServiceProperties(
      * @param deadlineMargin 요청 마감 이만큼 전부터는 새 호출을 시작하지 않는다
      * @param mcp            도구 서버(mcp-server) 연결
      */
-    public record Chat(
+    public record Chatbot(
             @DefaultValue("2") int concurrency,
             @DefaultValue("5") int maxToolCalls,
             @DefaultValue("20000") int turnTokenCap,

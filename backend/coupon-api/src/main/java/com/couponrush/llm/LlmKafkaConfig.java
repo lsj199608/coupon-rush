@@ -36,11 +36,11 @@ public class LlmKafkaConfig {
         return TopicBuilder.name(LlmTopics.REQUESTS).partitions(partitions).replicas(replicas).build();
     }
 
-    /** 챗봇 질문 전용 (LlmTopics.CHAT_REQUESTS 주석 — 긴 작업을 짧은 작업과 다른 칸에) */
+    /** 챗봇 질문 전용 (LlmTopics.CHATBOT_REQUESTS 주석 — 긴 작업을 짧은 작업과 다른 칸에) */
     @Bean
-    public NewTopic llmChatRequestsTopic(@Value("${app.kafka.topic.partitions:3}") int partitions,
+    public NewTopic llmChatbotRequestsTopic(@Value("${app.kafka.topic.partitions:3}") int partitions,
                                          @Value("${app.kafka.replicas:1}") int replicas) {
-        return TopicBuilder.name(LlmTopics.CHAT_REQUESTS).partitions(partitions).replicas(replicas).build();
+        return TopicBuilder.name(LlmTopics.CHATBOT_REQUESTS).partitions(partitions).replicas(replicas).build();
     }
 
     @Bean

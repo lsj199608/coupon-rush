@@ -86,7 +86,7 @@ cd backend
 |---|---|---|
 | 이벤트 문구 생성 | `FakeLlmClient.generateEventCopy` — 톤별 고정 문장에 키워드·수량·기간을 끼워 넣음 | `prompts/event-copy.v1.txt` + `EventCopyOutput` / `EventCopyOutputValidator` |
 | 자연어 검색 | `FakeEventSearch` — 정해진 표현만 인식("진행 중", "남은", "이번 주 끝나는" 등), 나머지 단어 → keywords. 처음 보는 표현은 이해하지 못함 | `prompts/event-search.v1.txt` + `EventSearchOutput` / `EventSearchOutputValidator` |
-| 챗봇 | `chat/model/FakeChatModel` — 정해진 말("내 쿠폰", "3번 이벤트", "발급해줘" …)로 도구를 하나 골라 mcp-server로 실제 조회하고, 결과를 틀에 넣어 답함. 앞 대화는 이해하지 못함 | `prompts/chat.v1.txt` + mcp-server 도구 목록 → Claude tool use (`client/anthropic/AnthropicChatModel`) |
+| 챗봇 | `chatbot/model/FakeChatbotModel` — 정해진 말("내 쿠폰", "3번 이벤트", "발급해줘" …)로 도구를 하나 골라 mcp-server로 실제 조회하고, 결과를 틀에 넣어 답함. 앞 대화는 이해하지 못함 | `prompts/chatbot.v1.txt` + mcp-server 도구 목록 → Claude tool use (`client/anthropic/AnthropicChatbotModel`) |
 
 (파일 위치: `backend/llm-service/src/main/java/com/couponrush/llmservice/client/`, 프롬프트는 `.../src/main/resources/prompts/`)
 어느 제공자든 결과는 같은 계약 형식으로 나가므로 coupon-api는 차이를 모릅니다. 기동 로그의 `LLM 제공자: fake` / `anthropic`으로 어느 쪽인지 확인할 수 있습니다.
@@ -149,6 +149,19 @@ Claude Code에서 내 쿠폰까지 쓰려면 access token(30분)을 연결 설�
 2. `claude mcp add --transport http coupon-rush http://localhost:8082/mcp --header "Authorization: Bearer <복사한 값>"`
    (이미 추가했다면 `claude mcp remove coupon-rush` 후 다시 추가). 30분이 지나면 도구가 "로그인이 필요합니다"라고 알려 주니 같은 방법으로 바꿉니다.
 - 서비스 인증은 `infra/.env`의 `MCP_SERVICE_TOKEN`, `INTERNAL_API_TOKEN`이 있을 때만 켜집니다 (없으면 그 경로만 꺼지고, 사람의 Bearer 경로는 그대로 동작).
+
+### 2-3. (선택, 개발 중) 채팅 서버: web-chat-service (8083)
+
+같은 이벤트 페이지를 보는 사람끼리 대화하는 WebSocket(STOMP) 서버입니다. 환경변수는 없습니다.
+
+```powershell
+cd backend
+.\gradlew :web-chat-service:bootRun    # → ws://localhost:8083/ws/web-chat
+```
+
+- 방 = 이벤트: 구독 `/topic/events/{id}`, 보내기 `/app/events/{id}/chat` (`{"content": "..."}`, 500자), 내 메시지 거절 사유 `/user/queue/errors`.
+- 지금은 **읽기만 됩니다** — 보내기는 로그인 연결 인증(1회용 티켓, 다음 단계)이 붙은 뒤부터 동작합니다.
+- 보낸 사람은 서버가 정하고, 회원마다 10초에 5개까지 보낼 수 있습니다. 허용한 Origin(`http://localhost:5173`)의 브라우저만 연결됩니다.
 
 ### 3. 프론트엔드: Vite (5173)
 
@@ -253,9 +266,10 @@ cd backend;  .\gradlew :coupon-api:benchmark   # (선택) 방식별 성능 측�
 
 ```
 backend/   Gradle 멀티모듈 루트
-  coupon-api/   Spring Boot (com.couponrush.{auth, user, coupon, llm, global}), Flyway 마이그레이션, Lua 스크립트
+  coupon-api/   Spring Boot (com.couponrush.{auth, user, coupon, llm, search, chatbot, global}), Flyway 마이그레이션, Lua 스크립트
   llm-service/  LLM 호출 전담 Spring Boot (Kafka 컨슈머, DB 없음)
   mcp-server/   AI 클라이언트용 MCP 도구 서버 (coupon-api 조회 API 어댑터, DB 없음)
+  web-chat-service/ 이벤트별 실시간 채팅방 (WebSocket + STOMP, DB 없음)
   libs/llm-contract/  두 서비스가 주고받는 Kafka 메시지 계약
 frontend/  React (src/{api, hooks, components, pages, auth, utils})
 infra/     docker-compose.yml, .env.example

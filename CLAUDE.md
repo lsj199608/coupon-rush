@@ -16,7 +16,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   구조화된 출력·거절(stop_reason=refusal)·사용 토큰·상태코드별 예외를 SDK가 그대로 제공해 재시도·서킷·예산 판정이 정확해서
 
 ## 구조
-- backend/ : Gradle 멀티모듈 루트 (gradlew 위치). coupon-api/ = 기존 Spring Boot 앱 전체, (7단계) llm-service/, libs/llm-contract/, mcp-server/
+- backend/ : Gradle 멀티모듈 루트 (gradlew 위치). coupon-api/ = 기존 Spring Boot 앱 전체, (7단계) llm-service/, libs/llm-contract/, mcp-server/, web-chat-service/
 - frontend/ : React 프로젝트
 - infra/ : docker-compose.yml 등 인프라 설정
 - docs/ : 설계/실험 기록 (concurrency-notes.md: 동시성 재현·해결 리포트, 단계마다 결과 추가)
@@ -136,29 +136,34 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
     - [x] B3) 수동 확인 2026-11-21 (docs/manual-check.md K1~K9): Claude Code에 Bearer 헤더로 연결 → get_my_coupons(웹 내 쿠폰과 일치)·
           search_events(AI_FILTER, 회원별 검색 한도)·get_event·발급은 링크 안내·남의 쿠폰 요청 무시, 로그아웃 토큰·헤더 없음 → "로그인이 필요합니다",
           헤더 거절 curl(틀린 서비스 토큰·ID만 401, 잘못된 ID·Bearer 동시 400, 정상 200, 내부 API에 사용자 JWT 403)
-    - [x] C1) 대화 저장 + 질문 API — 아래 "챗봇 대화 (7단계 C1, coupon-api)" 메모. V8 chat_sessions / chat_turns(턴 = 질문 + LLM 요청, 답은 llm_requests에만),
-          POST /api/chat/sessions/{id}/turns(202 + 폴링), 방마다 대기 중 질문 1개(409), 한도 분 5·일 50(별도 카운터), 최근 답 받은 10턴을 history로.
-          계약: LlmRequestType.CHAT(회원만), ChatInput / ChatTurn / ChatReply. (C1 당시 llm-service는 임시 고정 답변 → C2에서 실제 챗봇으로 교체)
-          챗봇은 캐시하지 않음. 테스트: ChatApiTest(17), 계약·llm-service 챗봇 테스트. 실제 실행 확인은 아직
-    - [x] C2) llm-service 챗봇 — 아래 "챗봇 (7단계 C2, llm-service)" 메모. ChatOrchestrator(tool use 루프: 도구 5회·질문당 토큰 20,000·마감 5초 전 중단,
+    - [x] C1) 대화 저장 + 질문 API — 아래 "챗봇 대화 (7단계 C1, coupon-api)" 메모. V8 chatbot_sessions / chatbot_turns(턴 = 질문 + LLM 요청, 답은 llm_requests에만),
+          POST /api/chatbot/sessions/{id}/turns(202 + 폴링), 방마다 대기 중 질문 1개(409), 한도 분 5·일 50(별도 카운터), 최근 답 받은 10턴을 history로.
+          계약: LlmRequestType.CHATBOT(회원만), ChatbotInput / ChatbotTurn / ChatbotReply. (C1 당시 llm-service는 임시 고정 답변 → C2에서 실제 챗봇으로 교체)
+          챗봇은 캐시하지 않음. 테스트: ChatbotApiTest(17), 계약·llm-service 챗봇 테스트. 실제 실행 확인은 아직
+    - [x] C2) llm-service 챗봇 — 아래 "챗봇 (7단계 C2, llm-service)" 메모. ChatbotOrchestrator(tool use 루프: 도구 5회·질문당 토큰 20,000·마감 5초 전 중단,
           넘으면 도구를 끄고 마지막 답 1회), McpToolGateway(공식 MCP SDK 클라이언트, 질문마다 연결, X-Mcp-Service-Token + X-Mcp-User-Id),
-          FakeChatModel(말 규칙 → 도구 1개 → 틀 답, 발급 요청은 검색 + 링크 안내) / AnthropicChatModel(Claude tool use, 응답 그대로 이어 붙임).
-          **챗봇 전용 토픽 llm-chat-requests + 전용 스레드**(검색 도구가 만드는 EVENT_SEARCH를 막지 않게), 서버 호출 검색은
-          coupon-api 내부 API /internal/users/{id}/coupons/search(회원별 한도). 새 env MCP_SERVER_URL. 테스트: ChatOrchestratorTest·FakeChatModelTest·
-          McpToolGatewayTest(내장 Tomcat + SDK 서버)·AnthropicChatModelTest(WireMock)·CostControlFlowTest. 실제 실행 확인은 아직
+          FakeChatbotModel(말 규칙 → 도구 1개 → 틀 답, 발급 요청은 검색 + 링크 안내) / AnthropicChatbotModel(Claude tool use, 응답 그대로 이어 붙임).
+          **챗봇 전용 토픽 llm-chatbot-requests + 전용 스레드**(검색 도구가 만드는 EVENT_SEARCH를 막지 않게), 서버 호출 검색은
+          coupon-api 내부 API /internal/users/{id}/coupons/search(회원별 한도). 새 env MCP_SERVER_URL. 테스트: ChatbotOrchestratorTest·FakeChatbotModelTest·
+          McpToolGatewayTest(내장 Tomcat + SDK 서버)·AnthropicChatbotModelTest(WireMock)·CostControlFlowTest. 실제 실행 확인은 아직
     - [x] C3) 실제 연결 확인 2026-11-19 (docs/manual-check.md I1~I7, fake): bootRun 3개 + API로 내 쿠폰·검색(AI 경로)·상세·발급 거절·
           다른 회원 사칭 무시·회원별 검색 한도·mcp-server 중단 시 즉시 LLM_UNAVAILABLE(다른 API 정상). 답 0.8~2.3초.
           주의: PowerShell 5.1 스크립트는 BOM 있는 UTF-8로 저장해야 한글 리터럴이 안 깨진다 (확인 중 이벤트 이름이 깨져 검색 0건이 나왔음 — 앱 문제 아님)
     - [x] C4) 프론트 챗봇 창 — 아래 "프론트엔드"의 "챗봇 창" 메모. 헤더 [AI 챗봇](로그인 시) → 오른쪽 아래 창(모바일 전체 화면),
           대화방 조회를 마지막 턴이 PENDING일 때만 1초 폴링, 답 속 주소는 링크(같은 사이트면 화면 이동), 실패 사유·[다시 보내기], [새 대화].
-          테스트 ChatPanel.test.tsx(9). 브라우저 수동 확인 2026-11-20 완료 (docs/manual-check.md J).
+          테스트 ChatbotPanel.test.tsx(9). 브라우저 수동 확인 2026-11-20 완료 (docs/manual-check.md J).
           확인 중 메모: fake 검색은 "커피쿠폰"(붙여 쓰기)·"진행"(한 단어)을 못 알아들어 0건 — fake 규칙 한계로 두기로 함(고치지 않음, 실제 모델은 이해)
   - [ ] D. WebSocket 이벤트 채팅방 (사람 ↔ 사람) — 목적: WebSocket 경험(연결·STOMP·연결 인증·scale-out). 계획 2026-11-18,
         B2·B3를 끝낸 뒤 시작. 설계는 아래 "WebSocket 채팅 계획" 메모. 챗봇(C)과는 별개 기능 (챗봇 답변 푸시는 SSE가 더 맞음)
-    - [ ] D1) chat-service 모듈(8083): Spring WebSocket + STOMP, 이벤트별 방 /topic/events/{id}, 메시지 500자·사용자별 도배 제한 (1대 기준)
-    - [ ] D2) 인증: coupon-api POST /api/chat/tickets(로그인) → 30초 1회용 티켓(Redis) → chat-service가 STOMP CONNECT에서 확인 후 삭제.
+    - [x] D1) web-chat-service 모듈(8083): Spring WebSocket + STOMP(SockJS 없음, 단순 브로커), 이벤트별 방 /topic/events/{id}, 보내기 /app/events/{id}/chat,
+          메시지 500자(코드 포인트)·회원별 도배 제한(10초 5개, 미끄러지는 창, 탭 합산), 거절 사유 /user/queue/errors(연결 유지) /
+          주소 위반·비로그인 보내기는 ERROR 프레임 + 연결 종료, Origin 허용 목록, 프레임 8KB·느린 클라이언트 제한, 하트비트 10초.
+          인증은 WebChatAuthenticator 인터페이스만 — D1 기본은 전원 비로그인(읽기만), 보내기는 D2 티켓부터 실제 동작 — 아래 "채팅 서버 (D1)" 메모.
+          테스트: WebChatRoomTest(14, 실제 STOMP 클라이언트 + 테스트용 인증기)·WebChatServiceTest·WebChatRateLimiterTest·WebChatRulesTest. bootRun 기동·헬스·Origin 403 확인
+          (2026-11-21 이름 정리로 chat-service → web-chat-service, 컨트롤러/서비스 분리 — 공통 메모 "이름 규칙")
+    - [ ] D2) 인증: coupon-api POST /api/web-chat/tickets(로그인, 패키지 com.couponrush.webchat) → 30초 1회용 티켓(Redis) → web-chat-service가 STOMP CONNECT에서 확인 후 삭제.
           보낸 사람·닉네임은 서버가 정함(사칭 불가). 재사용·만료 티켓 거절
-    - [ ] D3) scale-out: Redis pub/sub으로 인스턴스 간 전달 — chat-service 2대 테스트(A 접속자 메시지가 B 접속자에게)
+    - [ ] D3) scale-out: Redis pub/sub으로 인스턴스 간 전달 — web-chat-service 2대 테스트(A 접속자 메시지가 B 접속자에게)
     - [ ] D4) 프론트: 이벤트 상세 화면 채팅 패널(@stomp/stompjs, 자동 재연결), Vite 프록시 ws: true. 브라우저 창 2개로 수동 확인
     - [ ] D5) (선택) 최근 메시지 50개 Redis 보관(입장 시 표시), 남은 수량 실시간 푸시(상세 3초 폴링 대체)
 
@@ -171,7 +176,13 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   모듈 의존성은 각 모듈 build.gradle에. 실행·테스트 명령은 backend/에서 `:coupon-api:bootRun`처럼 모듈을 지정한다
   (`--tests` 필터는 모든 모듈에 걸리므로 모듈 지정 필수). bootRun·test의 작업 폴더는 모듈 폴더 → .env는 ../../infra/.env.
   모듈 간 공유는 메시지 계약(libs:llm-contract)만 — 엔티티·보안·에러 코드는 공유하지 않는다.
-- 패키지: com.couponrush.{auth, user, coupon, global(config, error)}
+- 패키지 (coupon-api): com.couponrush.{auth, user, coupon, llm, search, chatbot, global(config, error)}
+- **패키지 구조 = 기능 우선(package-by-feature), 기능 안에서 계층(Controller → Service → Repository)**. 모든 모듈 같은 규칙 —
+  입구(HTTP 컨트롤러 / STOMP 컨트롤러 / MCP 도구 / Kafka 리스너)는 프로토콜만, 업무 흐름은 Service. mapper 없음(JPA Repository가 그 자리).
+  2026-11-21 정리: web-chat-service에 WebChatService, mcp-server에 event/EventQueryService를 분리 (llm-service는 이미 Consumer → Processor/Orchestrator).
+- **이름 규칙 (2026-11-21)**: AI 챗봇 = **chatbot**(패키지 chatbot, 클래스 Chatbot*, API /api/chatbot/**, 테이블 chatbot_*, 코드 CHATBOT_*),
+  사람끼리 WebSocket 채팅 = **webChat**(모듈 web-chat-service, 패키지 webchat, 클래스 WebChat*, 코드 WEB_CHAT_*, 설정 app.web-chat, 연결 /ws/web-chat).
+  그냥 "chat"은 쓰지 않는다 (둘이 섞여서 D2 티켓 API가 챗봇 경로 /api/chat/** 와 겹칠 뻔함). 이전 이름 chat_* 테이블은 V9로, 계약은 SCHEMA_VERSION 2로 바꿈.
 - 이미지: pgvector/pgvector:pg17, redis:7.4-alpine, apache/kafka:3.9.1 (KRaft 단일 노드)
 - Kafka 리스너 2개: PLAINTEXT://localhost:9092(호스트에서 실행하는 앱·도구용, 기존) + INTERNAL://kafka:29092(compose 네트워크 안 컨테이너용).
   컨테이너가 localhost:9092로 붙으면 자기 자신을 가리킨다. 호스트에는 29092를 열지 않는다.
@@ -221,7 +232,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - Security: 기본은 전부 인증 필요. 공개 경로는 /actuator/health, POST /api/auth/refresh, GET /api/coupons, GET /api/coupons/*,
   POST /api/coupons/search, GET /api/coupons/search/* (A3).
   /api/admin/**는 ROLE_ADMIN. stateless, CSRF/폼로그인 off (OAuth2 state 보관에만 세션 잠깐 사용).
-- 챗봇 /api/chat/** (C1)은 로그인 필요 — 기본 규칙(anyRequest().authenticated())이라 SecurityConfig에 따로 없다.
+- 챗봇 /api/chatbot/** (C1)은 로그인 필요 — 기본 규칙(anyRequest().authenticated())이라 SecurityConfig에 따로 없다.
 - 서비스 간 내부 API /internal/** (B2): X-Internal-Token = INTERNAL_API_TOKEN이면 ROLE_INTERNAL_SERVICE (InternalServiceAuthenticationFilter).
   사용자 JWT(ADMIN 포함)로는 403 — 경로의 userId를 그대로 믿는 API라서. 토큰은 /internal/**에서만 동작(사용자 API에 못 씀), 미설정이면 전부 401(닫힘),
   비교는 MessageDigest.isEqual. Vite 프록시는 /api만 넘기므로 브라우저에서 닿지 않고, 배포 시 리버스 프록시도 /internal/**을 내보내지 않는다.
@@ -421,9 +432,9 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 
 | 폴더 | 내용 |
 |---|---|
-| api/ | axios 호출·응답 타입(coupons, admin, auth, llm, search, chat), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
-| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents, useEventCopy(문구 생성 상태 머신), useEventSearch(자연어 검색), useChat(챗봇) |
-| components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary, EventCopyPanel(AI 문구 추천), ChatPanel(챗봇 창) |
+| api/ | axios 호출·응답 타입(coupons, admin, auth, llm, search, chatbot), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
+| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents, useEventCopy(문구 생성 상태 머신), useEventSearch(자연어 검색), useChatbot(챗봇) |
+| components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary, EventCopyPanel(AI 문구 추천), ChatbotPanel(챗봇 창) |
 | pages/ | EventList, EventDetail, MyCoupons, AdminEventCreate, Login, OAuthCallback, NotFound |
 | auth/ | AuthContext(세션 상태), ProtectedRoute(로그인 필요), AdminRoute(ADMIN 필요) |
 | utils/ | format(날짜·카운트다운), eventForm(관리자 폼 검증·변환) |
@@ -518,21 +529,21 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 - 테스트: pages/EventSearch.test.tsx(조건 표시·폴링·접수 FALLBACK·폴링 TIMEOUT·결과 없음/전체 보기·빈 조건·에러 재시도·화면 타임아웃·빈 검색),
   utils/searchFilter.test.ts(날짜는 PC 시간대 0시로 만들어 시간대와 무관).
 
-#### 챗봇 창 (7단계 C4, components/ChatPanel + hooks/useChat + api/chat)
+#### 챗봇 창 (7단계 C4, components/ChatbotPanel + hooks/useChatbot + api/chatbot)
 ```
-헤더 [AI 챗봇] (로그인 시만) → ChatPanel (App 이 user.id 를 key 로 렌더 — 회원이 바뀌면 상태 초기화)
-  대화방 고르기: sessionStorage coupon-rush:chat-session:{회원 ID} → 없으면 GET /api/chat/sessions 의 최근 방 → 없으면 첫 질문 때 POST 로 만듦
-               저장한 방이 404(CHAT_SESSION_NOT_FOUND)면 잊고 최근 방을 다시 고른다
+헤더 [AI 챗봇] (로그인 시만) → ChatbotPanel (App 이 user.id 를 key 로 렌더 — 회원이 바뀌면 상태 초기화)
+  대화방 고르기: sessionStorage coupon-rush:chatbot-session:{회원 ID} → 없으면 GET /api/chatbot/sessions 의 최근 방 → 없으면 첫 질문 때 POST 로 만듦
+               저장한 방이 404(CHATBOT_SESSION_NOT_FOUND)면 잊고 최근 방을 다시 고른다
   질문: POST .../turns (202) → 대화방 GET 다시 → 마지막 턴이 PENDING 이고 마감 + 15초 전이면 1초마다 GET (그 밖엔 폴링 없음)
 ```
-- 대화 내용은 Query(['chat','sessions',id])에만, 화면 state는 "보는 방 ID"와 "[새 대화] 눌림"뿐. 화면이 따로 타임아웃을 판단하지 않는다 —
+- 대화 내용은 Query(['chatbot','sessions',id])에만, 화면 state는 "보는 방 ID"와 "[새 대화] 눌림"뿐. 화면이 따로 타임아웃을 판단하지 않는다 —
   서버가 마감(60초) 뒤 조회 때 TIMEOUT으로 끝내므로 그 응답을 그린다 (마감 + 15초는 서버가 응답하지 않을 때의 안전장치).
-- 답 기다리는 중에는 보내기·[새 대화]·[다시 보내기]를 막는다(서버도 409 CHAT_TURN_IN_PROGRESS). 연타는 inFlight ref로 렌더 전에 막는다.
+- 답 기다리는 중에는 보내기·[새 대화]·[다시 보내기]를 막는다(서버도 409 CHATBOT_TURN_IN_PROGRESS). 연타는 inFlight ref로 렌더 전에 막는다.
 - **답 속 주소 → 링크(linkify)**: HTML로 넣지 않고 글자 조각 + `<Link>`/`<a>` 요소로만 만든다(dangerouslySetInnerHTML 금지 — 답에 무엇이 와도 스크립트가 안 됨).
   같은 사이트(origin) 주소는 `<Link>`로 화면 이동 후 창을 닫고, 바깥 주소는 새 탭 + noopener.
-- 메시지: api/errors.ts의 CHAT_* (접수 거절)와 chatFailureMessage(FAILED 사유). Enter = 보내기, Shift+Enter = 줄바꿈, 한글 조합 중 Enter 무시, Esc = 닫기.
+- 메시지: api/errors.ts의 CHATBOT_* (접수 거절)와 chatbotFailureMessage(FAILED 사유). Enter = 보내기, Shift+Enter = 줄바꿈, 한글 조합 중 Enter 무시, Esc = 닫기.
 - 플로팅 버튼이 아니라 헤더 버튼: 모바일 상세의 sticky [발급 받기]를 가리지 않게. 모바일(600px 이하)은 창이 전체 화면.
-- 테스트(ChatPanel.test.tsx): 비로그인 버튼 없음, 첫 질문(방 생성 → PENDING 동안 보내기 막힘 → 답·내부 링크), 최근 방 이어 보기, 저장한 방 404 → 최근 방,
+- 테스트(ChatbotPanel.test.tsx): 비로그인 버튼 없음, 첫 질문(방 생성 → PENDING 동안 보내기 막힘 → 답·내부 링크), 최근 방 이어 보기, 저장한 방 404 → 최근 방,
   실패 사유·다시 보내기(retryable만), 접수 거절 메시지, 새 대화, 닫기/Esc, linkify가 HTML을 글자로 둠.
 - 테스트 메모: EventPages "중복 클릭" 테스트의 `expect(button).toBeDisabled()`가 클릭 직후 동기 검사라 App이 useAuth를 읽게 되자 깨졌다 —
   버튼 모양은 다음 렌더에서 바뀌므로 waitFor로, 중복 요청 방지는 requestIssue 1회 호출로 검증한다.
@@ -583,8 +594,8 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 | `llm-requests` | coupon-api → llm-service | requestId | `LlmRequestMessage(schemaVersion, requestId, type, requestedBy, requestedAt, deadline, regenerate, eventCopy, eventSearch)` |
 | `llm-results` | llm-service → coupon-api | requestId | `LlmResultMessage(schemaVersion, requestId, status, candidates, searchFilter, failureReason, model, inputTokens, outputTokens, cached, latencyMs, completedAt)` |
 | `llm-requests.DLT` | | | 역직렬화 불가 요청만. LLM 실패는 FAILED 결과로 돌려준다 (재시도 = 비용) |
-| `llm-chat-requests` (C2) | coupon-api → llm-service | requestId | `LlmRequestMessage`(type CHAT만). 그룹 llm-service-chat, 전용 스레드 — 아래 "챗봇 (C2)" |
-| `llm-chat-requests.DLT` | | | 챗봇 요청 중 역직렬화 불가 (에러 핸들러가 원래 토픽으로 DLT를 고른다) |
+| `llm-chatbot-requests` (C2) | coupon-api → llm-service | requestId | `LlmRequestMessage`(type CHATBOT만). 그룹 llm-service-chatbot, 전용 스레드 — 아래 "챗봇 (C2)" |
+| `llm-chatbot-requests.DLT` | | | 챗봇 요청 중 역직렬화 불가 (에러 핸들러가 원래 토픽으로 DLT를 고른다) |
 
 - 진화 규칙: 필드는 **추가만** (모든 레코드 @JsonIgnoreProperties(ignoreUnknown=true) → 먼저 배포된 쪽이 새 필드를 무시).
   이름 변경·삭제·의미 변경은 SCHEMA_VERSION을 올린다. 받는 쪽은 LlmTopics.isSupported(version)가 false면 처리하지 않는다.
@@ -601,11 +612,14 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
   전부 비어도 COMPLETED(isEmpty, JSON에는 안 실림 — 어떻게 보여 줄지는 coupon-api가 정함). 기간은 발급 기간 기준 [from, to).
   "이번 주" 같은 상대 시각은 requestedAt(한국 시각) 기준 — 기준 시각 필드를 따로 두지 않음. 검색은 regenerate 항상 false.
   새 필드는 끝/중간에 추가했지만 JSON은 이름으로 읽으므로 호환 (이전 메시지 = null). 단 **레코드 전체 생성자를 직접 쓰는 테스트는 인자 추가 필요**.
-- 챗봇(C1, 2026-11-19): LlmRequestType.CHAT + 요청 필드 chat(ChatInput: message ≤ 500, history ≤ 10턴 — ChatTurn(question, answer)),
-  결과 필드 chatReply(ChatReply: text ≤ 2000). **CHAT은 requestedBy ≥ 1만**(생성자 검사) — "내 쿠폰"을 조회하는 기능이라 비로그인 0 금지,
+- 챗봇(C1, 2026-11-19): LlmRequestType.CHATBOT + 요청 필드 chatbot(ChatbotInput: message ≤ 500, history ≤ 10턴 — ChatbotTurn(question, answer)),
+  결과 필드 chatbotReply(ChatbotReply: text ≤ 2000). **CHATBOT은 requestedBy ≥ 1만**(생성자 검사) — "내 쿠폰"을 조회하는 기능이라 비로그인 0 금지,
   C2에서 requestedBy가 mcp-server X-Mcp-User-Id가 된다(누구인지는 문장이 아니라 JWT). 새 필드는 두 레코드의 **끝**에 추가(기존 생성자 인자 순서 유지).
-  COMPLETED는 candidates / searchFilter / chatReply 중 정확히 하나. regenerate·cached는 챗봇에서 항상 false.
-  enum 값 추가라 **llm-service부터 배포** — 컨테이너로 띄우면 `--build` 필수(구버전은 CHAT을 못 읽어 DLT → 60초 후 TIMEOUT).
+  COMPLETED는 candidates / searchFilter / chatbotReply 중 정확히 하나. regenerate·cached는 챗봇에서 항상 false.
+  enum 값 추가라 **llm-service부터 배포** — 컨테이너로 띄우면 `--build` 필수(구버전은 CHATBOT을 못 읽어 DLT → 60초 후 TIMEOUT).
+- **SCHEMA_VERSION 2 (2026-11-21, 이름 정리)**: CHAT → CHATBOT, 필드 chat → chatbot, chatReply → chatbotReply, ChatInput/ChatTurn/ChatReply → Chatbot*,
+  토픽 llm-chat-requests → llm-chatbot-requests. 문구 생성·검색은 v1과 형식이 같아 isSupported(1)도 true(테스트로 고정). v1의 CHAT 메시지만 못 읽어 DLT →
+  **coupon-api·llm-service를 함께 다시 띄우고, 컨테이너 llm-service는 `--build`**. DB의 기존 CHAT 행은 V9가 CHATBOT으로 바꾼다.
 - LlmContractJsonTest: 왕복 직렬화, **필드 이름 고정**(바꾸면 실패 — 의도한 변경이면 버전과 함께 고친다), 고정 JSON 읽기,
   모르는 필드 무시(FAIL_ON_UNKNOWN_PROPERTIES=true인 엄격한 mapper로 검증), 빠진 선택 필드 기본값, 규칙 위반 거절.
 
@@ -634,7 +648,6 @@ llm-results 컨슈머 (그룹 coupon-api-llm-results, 리스너 llmResultListene
   한도는 비용뿐 아니라 요청 남발도 막는 용도. 대안(보류): 결과가 cached=true면 카운트 되돌리기 / 화면에서 직전 결과와 같은 입력이면 요청 안 함.
 - 격리: coupon-api는 :llm-contract만 의존. LlmIsolationTest가 spring-ai / anthropic / openai / langchain4j가 클래스패스에 없음을 검사.
   LlmRequestApiTest가 결과 리스너의 그룹·컨테이너·에러 핸들러가 발급 리스너와 다른지 검사. 테스트 정리: llm_requests 행, llm:* 키.
-- 아직 없음: 일일 토큰 예산(5단계, llm-service가 판정·기록), coupons.description(6단계).
 
 ### llm-service (7단계) — backend/llm-service, com.couponrush.llmservice, 포트 8081(헬스체크만)
 ```
@@ -659,7 +672,7 @@ llm-requests ─▶ LlmRequestConsumer (그룹 llm-service, concurrency 2 = 동�
   | 자연어 검색 | FakeEventSearch — 정해진 표현만 인식, 나머지 단어 → keywords | event-search.v1.txt + EventSearchOutput → EventSearchOutputValidator |
   fake 토큰은 글자 수로 흉내(예산 로직 검증용), app.llm.fake.delay로 응답 지연(로컬 화면 확인용). fake 결과는 품질이 아니라 흐름 확인용 —
   사용자에게 설명할 때 이 구분을 분명히 한다. 같은 설명이 README "2-1. LLM 서비스"와 LlmClient 주석에도 있다 (바꾸면 셋 다).
-- 챗봇(CHAT): 처리기가 LlmClient 대신 **chat/ChatResponder**(= ChatOrchestrator)에 맡긴다 — 아래 "챗봇 (7단계 C2)" 메모.
+- 챗봇(CHATBOT): 처리기가 LlmClient 대신 **chatbot/ChatbotResponder**(= ChatbotOrchestrator)에 맡긴다 — 아래 "챗봇 (7단계 C2)" 메모.
   (LlmClient의 "한 번 호출" 모양이 아니라 모델 ↔ 도구를 여러 번 오가서 인터페이스를 따로 둠)
   **챗봇은 응답 캐시를 읽지도 쓰지도 않는다** — 답이 지난 대화·"내 쿠폰"처럼 사람·시점마다 다른 조회에 기대서, 같은 문장에 같은 답을 주면 남의 정보가 샐 수 있다.
   예산 확인·사용량 기록·멱등(llm:done)·마감 건너뛰기는 다른 기능과 같다 (CostControlFlowTest 챗봇 3개).
@@ -757,36 +770,36 @@ GET /api/coupons/search/{id} → PENDING / COMPLETED(AI 조건 filter + DB 결�
   CouponSearchTest(정렬·부분 일치·ALL/ANY·이스케이프·상태·기간 경계·Redis 재고·AND), KeywordQueryTest.
 - 테스트 메모: 고정 날짜로 Redis 적재하는 테스트는 키 만료(종료 + 7일, 절대 시각)가 지나면 깨진다 — RedisCouponStockTest가 2026-11-13에 깨져 현재 시각 기준으로 바꿈.
 
-### 챗봇 대화 (7단계 C1, coupon-api) — com.couponrush.chat, V8 chat_sessions / chat_turns
+### 챗봇 대화 (7단계 C1, coupon-api) — com.couponrush.chatbot, V8 chat_sessions / chat_turns → V9에서 chatbot_sessions / chatbot_turns로 이름 변경
 ```
-POST /api/chat/sessions → 201 대화방     GET /api/chat/sessions → 내 대화방 20개(최근 순, title = 첫 질문 30자)
-GET  /api/chat/sessions/{id} → 대화방 + 최근 턴 50개(오래된 것부터)
-POST /api/chat/sessions/{id}/turns {message 1~500} (한 트랜잭션)
-  ① 대화방 행 잠금(FOR UPDATE) + 소유자 확인(남의 방 404) → ② 최근 턴이 PENDING이면 409 CHAT_TURN_IN_PROGRESS
-  ③ 예산(LlmBudgetGuard) → 챗봇 한도(llm:chat-rate:{userId}, 분 5·일 50) → ④ llm_requests PENDING(CHAT, 마감 60초) + chat_turns 저장 → 커밋
-  ⑤ 커밋 후 llm-requests 발행(실패면 요청 FAILED(PUBLISH_FAILED) + 503 CHAT_UNAVAILABLE, 턴은 실패로 남음) → 202 PENDING 턴 + Location
-GET  /api/chat/sessions/{id}/turns/{turnId} → PENDING / COMPLETED(answer) / FAILED(failureReason, retryable). 마감 지난 PENDING은 그 자리에서 TIMEOUT
+POST /api/chatbot/sessions → 201 대화방     GET /api/chatbot/sessions → 내 대화방 20개(최근 순, title = 첫 질문 30자)
+GET  /api/chatbot/sessions/{id} → 대화방 + 최근 턴 50개(오래된 것부터)
+POST /api/chatbot/sessions/{id}/turns {message 1~500} (한 트랜잭션)
+  ① 대화방 행 잠금(FOR UPDATE) + 소유자 확인(남의 방 404) → ② 최근 턴이 PENDING이면 409 CHATBOT_TURN_IN_PROGRESS
+  ③ 예산(LlmBudgetGuard) → 챗봇 한도(llm:chatbot-rate:{userId}, 분 5·일 50) → ④ llm_requests PENDING(CHATBOT, 마감 60초) + chatbot_turns 저장 → 커밋
+  ⑤ 커밋 후 llm-requests 발행(실패면 요청 FAILED(PUBLISH_FAILED) + 503 CHATBOT_UNAVAILABLE, 턴은 실패로 남음) → 202 PENDING 턴 + Location
+GET  /api/chatbot/sessions/{id}/turns/{turnId} → PENDING / COMPLETED(answer) / FAILED(failureReason, retryable). 마감 지난 PENDING은 그 자리에서 TIMEOUT
 ```
-- **턴 = 질문 + LLM 요청 하나**(chat_turns.llm_request_id UNIQUE FK). 답·상태·실패 사유·토큰은 llm_requests에만 — 답을 따로 저장하면
+- **턴 = 질문 + LLM 요청 하나**(chatbot_turns.llm_request_id UNIQUE FK). 답·상태·실패 사유·토큰은 llm_requests에만 — 답을 따로 저장하면
   결과 도착·타임아웃·늦은 결과·중복 결과마다 두 테이블이 어긋날 수 있어서. 결과 반영은 기존 LlmResultHandler 그대로(result = {"text"}).
 - 왜 접수를 한 트랜잭션으로: 요청 행과 턴이 함께 생기거나 함께 없어야 하고, 발행은 커밋 뒤(결과가 행보다 먼저 오면 버려짐).
-  그래서 LlmRequestService를 prepareChat(예산·한도·PENDING 저장, 호출자 트랜잭션 참여) / publish(커밋 후)로 나눴다.
+  그래서 LlmRequestService를 prepareChatbot(예산·한도·PENDING 저장, 호출자 트랜잭션 참여) / publish(커밋 후)로 나눴다.
 - 방마다 기다리는 질문 1개: 답이 섞이거나 직전 답이 history에서 빠진 채 처리되지 않게. 동시 요청은 대화방 행 잠금으로 직렬화(동시 2개 → 202 + 409 테스트).
   답이 안 오면 마감(60초) 뒤 TIMEOUT이 되어 다시 질문할 수 있다. 다른 방은 막지 않는다.
 - history = 답을 받은(COMPLETED) 최근 턴 최대 10개, 오래된 것부터 (최근 20턴을 살펴봄). 실패·대기 턴은 빼고 화면에는 보여 준다.
-- 에러 코드는 챗봇용으로 바꿔 준다(CHAT_RATE_LIMITED / CHAT_DAILY_LIMIT_EXCEEDED / CHAT_BUDGET_EXCEEDED / CHAT_UNAVAILABLE) — 공통 LLM 코드 메시지가 "문구 생성" 기준이라.
+- 에러 코드는 챗봇용으로 바꿔 준다(CHATBOT_RATE_LIMITED / CHATBOT_DAILY_LIMIT_EXCEEDED / CHATBOT_BUDGET_EXCEEDED / CHATBOT_UNAVAILABLE) — 공통 LLM 코드 메시지가 "문구 생성" 기준이라.
   다시 보내기 = 새 턴(같은 턴을 재처리하지 않음). 프론트 메시지(api/errors.ts)는 C4에서.
-- chat_sessions.user_id는 FK + ON DELETE CASCADE(대화는 회원 것), chat_turns → chat_sessions CASCADE, chat_turns → llm_requests는 RESTRICT.
-  **테스트 정리 순서: chat_sessions → llm_requests → users** (턴이 남아 있으면 llm_requests를 못 지운다).
-- 설정 app.llm.chat.{request-timeout 60s, per-minute 5, per-day 50} (환경변수 없음). 구조 규칙(ArchitectureTest): chat → llm은 허용, chat → search 금지, coupon·llm → chat 금지.
+- chatbot_sessions.user_id는 FK + ON DELETE CASCADE(대화는 회원 것), chatbot_turns → chatbot_sessions CASCADE, chatbot_turns → llm_requests는 RESTRICT.
+  **테스트 정리 순서: chatbot_sessions → llm_requests → users** (턴이 남아 있으면 llm_requests를 못 지운다).
+- 설정 app.llm.chatbot.{request-timeout 60s, per-minute 5, per-day 50} (환경변수 없음). 구조 규칙(ArchitectureTest): chatbot → llm은 허용, chatbot → search 금지, coupon·llm → chatbot 금지.
 - 남은 것: 대화방 삭제·이름 바꾸기 없음, 오래된 대화 정리 없음, 대화방 수 상한 없음(한도로만 묶임).
 
-### 챗봇 (7단계 C2, llm-service) — chat/, client/anthropic/AnthropicChatModel, prompts/chat.v1.txt
+### 챗봇 (7단계 C2, llm-service) — chatbot/, client/anthropic/AnthropicChatbotModel, prompts/chatbot.v1.txt
 ```
-llm-chat-requests ─▶ LlmRequestConsumer.consumeChat (그룹 llm-service-chat, app.llm.chat.concurrency 2) ─▶ LlmRequestProcessor (멱등·마감·예산 동일, 캐시 없음)
-  └▶ ChatOrchestrator.answer(회원, 질문+지난 10턴, 접수 시각, 마감)
+llm-chatbot-requests ─▶ LlmRequestConsumer.consumeChatbot (그룹 llm-service-chatbot, app.llm.chatbot.concurrency 2) ─▶ LlmRequestProcessor (멱등·마감·예산 동일, 캐시 없음)
+  └▶ ChatbotOrchestrator.answer(회원, 질문+지난 10턴, 접수 시각, 마감)
        ① McpToolGateway.open(회원) — mcp-server initialize + tools/list (헤더 X-Mcp-Service-Token, X-Mcp-User-Id)
-       ② ChatModel.start(질문, 도구 목록, 오늘 날짜) → next(toolsAllowed) ─┬ Answer → ChatReply (2000자로 자름, 빈 답 = INVALID_OUTPUT)
+       ② ChatbotModel.start(질문, 도구 목록, 오늘 날짜) → next(toolsAllowed) ─┬ Answer → ChatbotReply (2000자로 자름, 빈 답 = INVALID_OUTPUT)
                                                                        └ ToolRequests → 도구 실행 → addToolResults → ②로
 ```
 - **토픽을 나눈 이유(벌크헤드)**: 챗봇 질문 하나가 스레드를 수십 초 잡고, 그 안의 search_events가 다시 llm-requests(EVENT_SEARCH)를 만든다.
@@ -798,13 +811,13 @@ llm-chat-requests ─▶ LlmRequestConsumer.consumeChat (그룹 llm-service-chat
 - **회원은 연결 헤더로만** — open(userId)에서 정해지고 모델은 도구 인자로 바꿀 수 없다(get_my_coupons 인자 없음). 도구는 전부 조회 전용.
   MCP_SERVICE_TOKEN이 비면 open이 LLM_UNAVAILABLE(+ERROR 로그). 연결 실패도 LLM_UNAVAILABLE(모델 호출 0). 도구 호출 실패는 예외가 아니라 isError 결과 → 모델이 설명.
 - 질문마다 MCP 연결을 새로 연다(헤더에 회원이 실려 회원별 연결이 필요, 수십 ms라 무시할 만함).
-- **FakeChatModel**(기본): 발급 말("발급해", "받아줘" …) → 발급 말을 뺀 검색 + "발급은 직접" 안내 / 내 쿠폰 말 → get_my_coupons / "3번 이벤트" → get_event /
+- **FakeChatbotModel**(기본): 발급 말("발급해", "받아줘" …) → 발급 말을 뺀 검색 + "발급은 직접" 안내 / 내 쿠폰 말 → get_my_coupons / "3번 이벤트" → get_event /
   인사 → 도구 없이 안내 / 그 외 → search_events(문장 그대로). 도구 1회 → 결과를 틀에 넣은 답. 지난 대화는 쓰지 않는다. 토큰은 글자 수로 흉내.
-- **AnthropicChatModel**: tools = mcp-server tools/list의 JSON Schema 그대로(properties·required·additionalProperties), 응답은 `Message.toParam()`으로
+- **AnthropicChatbotModel**: tools = mcp-server tools/list의 JSON Schema 그대로(properties·required·additionalProperties), 응답은 `Message.toParam()`으로
   **그대로** 이어 붙임(thinking 블록 보존 — append-only), 도구 결과는 한 user 메시지에 모두, 도구를 끌 땐 tool_choice none(정의는 유지),
   thinking 미전송(적응형), effort = app.llm.anthropic.effort(low), max_tokens 8000, fallbacks "default". refusal → CONTENT_REFUSED, max_tokens → INVALID_OUTPUT.
   재시도·서킷 브레이커는 AnthropicLlmClient와 공유(createMessage → guarded). 시스템 프롬프트 끝에 오늘 날짜·요일. **실제 API로는 아직 미확인**.
-- 설정 app.llm.chat.{concurrency, max-tool-calls, turn-token-cap, max-tokens, deadline-margin, mcp.{url(MCP_SERVER_URL), service-token(MCP_SERVICE_TOKEN), request-timeout 25s}}.
+- 설정 app.llm.chatbot.{concurrency, max-tool-calls, turn-token-cap, max-tokens, deadline-margin, mcp.{url(MCP_SERVER_URL), service-token(MCP_SERVICE_TOKEN), request-timeout 25s}}.
 - 제한: 컨테이너(llm 프로필)로 띄운 llm-service는 mcp-server(호스트 127.0.0.1)에 닿지 않는다 → 챗봇은 호스트 bootRun에서만. mcp-server 컨테이너화는 나중.
 
 ### MCP 서버 (7단계 B1·B2) — backend/mcp-server, com.couponrush.mcpserver, 포트 8082
@@ -819,6 +832,8 @@ MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Sessio
   전송이 HttpServlet이라 ServletRegistrationBean(asyncSupported)으로 등록. API는 jar를 javap로 확인함 — Tool.builder()(인자 없음)·securityValidator는
   deprecated → Tool.builder(name, jsonMapper, schemaJson), httpHeaderValidator 사용. MCP 프로토콜 매퍼는 Spring ObjectMapper와 분리(new ObjectMapper()).
 - 다른 모듈에 의존하지 않는다 (coupon-api와는 공개 REST만, 응답 DTO는 필요한 필드만 + ignoreUnknown).
+- 계층 (2026-11-21 분리): tool/EventTools(MCP 입구 = 컨트롤러: 도구 스키마·설명, 인자 검사, 결과·오류를 CallToolResult로) →
+  event/EventQueryService(서비스: coupon-api 조회 + 결과 가공, MCP를 모름) → couponapi/CouponApiClient(바깥 REST 호출). 결과 모양은 event/EventViews.
 - 도구 결과: 본문은 JSON 문자열. 이벤트마다 statusLabel(한국어), 기간은 "yyyy-MM-dd HH:mm KST", **url = 프론트 이벤트 페이지(발급은 사람이 여기서)**.
   search_events는 searchMethod AI_FILTER(조건 conditions) / KEYWORD(keywords + fallbackReason)를 알려 준다. 도구 주석 readOnly·idempotent·openWorld=false.
 - 실패는 예외가 아니라 isError=true + 한국어 설명 (모델이 읽고 인자를 고치거나 사용자에게 설명). 404 → "찾을 수 없습니다: {coupon-api 메시지}",
@@ -847,7 +862,7 @@ MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Sessio
 ### LLM 다음 기능 계획 (7단계 이후 기능, 2026-11-09 수립 — 미구현)
 ```
 [Claude Code 등 외부 MCP 클라이언트] ─┐
-[llm-service ChatOrchestrator] ───────┴→ [mcp-server] ─REST→ [coupon-api] → DB
+[llm-service ChatbotOrchestrator] ───────┴→ [mcp-server] ─REST→ [coupon-api] → DB
 [프론트] ─HTTP→ [coupon-api] ─Kafka 요청/응답→ [llm-service]
 ```
 - 자연어 검색: LLM은 질문 → 검색 필터 추출만, 실제 조회는 DB. 없는 이벤트를 지어낼 수 없고 결과 검증이 쉽다.
@@ -867,17 +882,51 @@ MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Sessio
 
 ### WebSocket 채팅 계획 (D, 2026-11-18 수립 — 미구현)
 ```
-[브라우저] ① POST /api/chat/tickets (로그인) ─▶ coupon-api: 1회용 티켓(30초) Redis 저장
-           ② ws /ws/chat + STOMP CONNECT(ticket) ─▶ chat-service: 티켓 확인·삭제 → 사용자 확정
+[브라우저] ① POST /api/web-chat/tickets (로그인) ─▶ coupon-api: 1회용 티켓(30초) Redis 저장
+           ② ws /ws/web-chat + STOMP CONNECT(ticket) ─▶ web-chat-service: 티켓 확인·삭제 → 사용자 확정
            ③ SUBSCRIBE /topic/events/{id}, SEND /app/events/{id}/chat
-                chat-service ─ Redis pub/sub ─ chat-service(다른 인스턴스)
+                web-chat-service ─ Redis pub/sub ─ web-chat-service(다른 인스턴스)
 ```
-- **별도 서비스(chat-service)**: WebSocket은 연결을 오래 쥔다 → 선착순 오픈 순간 coupon-api의 스레드·메모리를 쓰지 않게 분리 (llm-service·mcp-server와 같은 원칙).
+- **별도 서비스(web-chat-service)**: WebSocket은 연결을 오래 쥔다 → 선착순 오픈 순간 coupon-api의 스레드·메모리를 쓰지 않게 분리 (llm-service·mcp-server와 같은 원칙).
 - **티켓 인증**: 브라우저 WebSocket은 Authorization 헤더를 못 붙이고, URL에 토큰을 싣지 않는 규칙 → 짧은 1회용 티켓을 첫 STOMP 프레임으로.
-  티켓은 coupon-api가 발급하므로 chat-service는 JWT 비밀키를 모른다 (비밀값을 여러 서비스에 나누지 않음).
+  티켓은 coupon-api가 발급하므로 web-chat-service는 JWT 비밀키를 모른다 (비밀값을 여러 서비스에 나누지 않음).
 - **브로커**: 서버 안은 STOMP 단순 브로커, 서버 간은 Redis pub/sub을 직접 연결 — RabbitMQ 릴레이를 쓰면 scale-out 문제가 숨겨지므로 학습 목적상 직접 다룬다.
 - 보호: 메시지 크기 상한, 사용자별 도배 제한, 느린 클라이언트(전송 버퍼·시간 제한), 보낸 사람은 서버가 채움. 발급 기능과 무관(조회·대화만).
 - 챗봇(C)과 구분: 챗봇은 서버 → 브라우저 한 방향 푸시라 SSE가 더 단순하다. WebSocket은 사람끼리 양방향 대화에 쓴다.
+
+### 채팅 서버 (7단계 D1) — backend/web-chat-service, com.couponrush.webchat, 포트 8083
+```
+ws /ws/web-chat (STOMP, SockJS 없음) ─▶ StompInboundGuard(입구 검사) ─┬ /app/events/{id}/chat → WebChatController → WebChatService → WebChatMessagePublisher → /topic/events/{id}
+                                                                      └ SUBSCRIBE → 단순 브로커
+```
+| 주소 | 누가 | 내용 |
+|---|---|---|
+| SUBSCRIBE `/topic/events/{id}` | 누구나 (이벤트 페이지가 공개) | `WebChatMessage(messageId, eventId, senderId, senderNickname, content, sentAt)` |
+| SEND `/app/events/{id}/chat` | 로그인 연결만 | 바디 `{"content"}`만 읽음 — senderId 등 다른 필드는 무시(보낸 사람·시각·ID는 서버가 채움) |
+| SUBSCRIBE `/user/queue/errors` | 로그인 연결 | 내 메시지 거절 `{"code","message"}` (보낸 세션에만, broadcast=false) |
+- 패키지: auth/(WebChatUser = Principal, WebChatAuthenticator, AnonymousWebChatAuthenticator, StompInboundGuard), room/(WebChatController·WebChatService·메시지·도배 제한·발행), config/.
+  계층: WebChatController = STOMP 입구(로그인 연결 확인 + 거절을 /user/queue/errors로), WebChatService = 도배 제한 → 본문 규칙(공백·500자) → 메시지 만들기 → 발행
+  (STOMP를 몰라 연결 없이 단위 테스트 — WebChatServiceTest). WebChatSendRequest는 값만(검사는 서비스).
+- 보내기 주소 `/app/events/{id}/chat`의 chat은 그대로 둠 — /ws/web-chat 안에서만 쓰는 동작 이름이라 챗봇과 섞이지 않는다.
+- **거절 두 종류**: 정상 화면이 보내지 않는 요청(허용 목록 밖 주소 구독·보내기, /topic 직접 SEND, 비로그인 SEND)은 ERROR 프레임(message 헤더 = 코드) + 연결 종료 /
+  메시지 내용(WEB_CHAT_EMPTY_MESSAGE·WEB_CHAT_MESSAGE_TOO_LONG·WEB_CHAT_INVALID_MESSAGE)·도배(WEB_CHAT_RATE_LIMITED)는 /user/queue/errors, 연결 유지. 코드 접두사 WEB_CHAT_(챗봇 CHATBOT_*와 구분).
+- **/topic 직접 SEND 금지가 핵심**: 단순 브로커는 클라이언트가 /topic에 보낸 SEND를 그대로 뿌려서, 막지 않으면 컨트롤러(보낸 사람 채우기·검사)를 건너뛴 사칭이 된다.
+  주소는 WebChatDestinations의 정규식(이벤트 ID 1~18자리)만.
+- **순서**: preserveReceiveOrder(같은 연결의 프레임 순서대로 처리) + preservePublishOrder(한 연결로 가는 메시지 순서 유지). 연결끼리는 병렬.
+  ⚠ preserveReceiveOrder에서는 Spring(OrderedMessageChannelDecorator)이 **인터셉터 예외를 로그만 남기고 삼킨다** → ERROR 프레임이 안 나감.
+  그래서 입구 검사는 예외를 던지지 않고 clientOutboundChannel로 ERROR 프레임을 직접 보낸 뒤 null(프레임 버림)을 반환한다 (Spring이 ERROR를 보낸 뒤 연결을 닫음).
+  ⚠ preservePublishOrder에서 **세션이 여러 개인 회원에게 convertAndSendToUser**(broadcast)를 하면 "Expected mutable SimpMessageHeaderAccessor"로 실패한다
+  (Spring 6.2.19에서 확인). 지금은 broadcast=false만 써서 해당 없음 — 회원의 모든 탭에 보내야 하면 세션별로 보내거나 이 설정을 다시 볼 것.
+- 도배 제한(WebChatRateLimiter): 회원 기준(탭 합산), 최근 10초 5개(app.web-chat.rate-limit.*), 한도로 거절된 시도는 세지 않음, 내용 검사보다 먼저 셈(잘못된 메시지 연타도 한도 안).
+  형식 오류(JSON 아님)는 컨트롤러 인자 변환에서 나서 세지 않는다. 서버 메모리라 서버마다 따로 센다 → D3(여러 대)에서 필요하면 Redis로. 1분마다 빈 기록 정리(@Scheduled).
+- 보호: Origin 허용 목록(app.web-chat.allowed-origins, 위반 403 — Origin 없는 비브라우저 클라이언트는 대상 아님), 프레임 8KB(넘으면 연결 종료),
+  보낼 버퍼 512KB·10초(느린 클라이언트 끊기), 하트비트 10초(브로커 스케줄러는 messageBrokerTaskScheduler를 @Lazy로 받음).
+- 이벤트가 실제로 있는지는 확인하지 않는다(DB 없음) — 없는 이벤트 방은 빈 방일 뿐. 필요하면 D2 티켓 발급 때 coupon-api가 확인.
+- **D1 기본 인증기는 전원 비로그인**(헤더로 회원 ID를 받는 개발용 인증은 두지 않음 — 켜진 채 배포되면 사칭). 실제 보내기는 D2 티켓부터.
+  WebChatMessagePublisher는 D3에서 Redis pub/sub 구현으로 바꿀 경계(지금은 LocalWebChatMessagePublisher = 이 서버 브로커).
+- 테스트 WebChatRoomTest: WebSocketStompClient로 실제 연결, @Primary 테스트 인증기(CONNECT 헤더 test-user-id). 방 구독 확인은 서버 SimpMessagingTemplate로
+  표시용 메시지(probe)를 받을 때까지, 오류 큐 구독 확인은 같은 연결로 형식 오류 하나를 보내 그 거절을 받는 것으로(순서 보장 덕분).
+  "안 받음"은 거절 응답을 받은 시점에 확인(거절은 브로커 전에 끝남) — sleep은 "다른 탭에 안 감" 300ms 하나뿐. 테스트마다 새 회원 ID(도배 상태가 컨텍스트에 남음).
 
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)
@@ -885,6 +934,7 @@ MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Sessio
 - llm-service 실행(선택, 문구 생성용): 컨테이너 `cd infra; docker compose --profile llm up -d --build` (로그 `docker logs -f coupon-rush-llm-service`)
   또는 호스트 `cd backend; .\gradlew :llm-service:bootRun` → 8081 (fake 제공자). 둘 중 하나만
 - MCP 서버 실행: `cd backend; .\gradlew :mcp-server:bootRun` → http://localhost:8082/mcp (coupon-api 8080이 떠 있어야 도구가 동작)
+- 채팅 서버 실행: `cd backend; .\gradlew :web-chat-service:bootRun` → ws://localhost:8083/ws/web-chat (D1은 읽기만 — 보내기는 D2 티켓 인증부터)
 - 수동 확인 절차: docs/manual-check.md (로그인·발급·관리자·AI 문구·장애 격리·예산·모바일, 기록표 포함)
 - 하루 LLM 사용량: `docker exec coupon-rush-redis redis-cli HGETALL "llm:usage:$((Get-Date).ToString('yyyyMMdd'))"`
 - 전체 테스트: `cd backend; .\gradlew test` (모든 모듈). 한 모듈만: `.\gradlew :coupon-api:test`

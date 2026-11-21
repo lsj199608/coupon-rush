@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: web-chat-service
+
+server:
+  port: 8083
+
+app:
+  web-chat:
+    endpoint: /ws/web-chat                       # WebSocket 주소 (ws://localhost:8083/ws/web-chat, 프론트는 Vite 프록시로 같은 출처)
+    # 브라우저 Origin 허용 목록 — 다른 사이트의 페이지가 사용자의 브라우저로 채팅에 접속하는 것(CSWSH)을 막는다.
+    # Origin 헤더가 없는 요청(브라우저가 아닌 클라이언트)은 이 검사 대상이 아니다 — 보내기 권한은 D2 티켓으로 따로 막는다
+    allowed-origins: http://localhost:5173
+    rate-limit:
+      max-messages: 5                        # 회원 한 명이 window 안에 보낼 수 있는 메시지 수 (탭을 여러 개 열어도 합산)
+      window: 10s
+    transport:
+      message-size-limit: 8KB                # 받는 STOMP 프레임 상한 (메시지 500자 + 헤더에 넉넉함, 큰 프레임으로 메모리를 쓰지 못하게)
+      send-buffer-size-limit: 512KB          # 느린 클라이언트에게 쌓아 둘 수 있는 보낼 데이터 상한 — 넘으면 그 연결을 끊는다
+      send-time-limit: 10s                   # 한 클라이언트에게 보내는 데 이 시간을 넘기면 끊는다
+    heartbeat: 10s                           # 서버 ↔ 클라이언트 하트비트 (끊어진 연결을 찾아 정리)
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

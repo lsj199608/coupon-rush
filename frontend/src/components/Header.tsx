@@ -2,8 +2,8 @@ import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { ROUTES } from '../routes';
 
-/** @param chatOpen / onToggleChat 챗봇 창 (로그인한 사람에게만 버튼이 보인다) */
-export function Header({ chatOpen = false, onToggleChat }: { chatOpen?: boolean; onToggleChat?: () => void }) {
+/** @param chatbotOpen / onToggleChatbot 챗봇 창 (로그인한 사람에게만 버튼이 보인다) */
+export function Header({ chatbotOpen = false, onToggleChatbot }: { chatbotOpen?: boolean; onToggleChatbot?: () => void }) {
   const { status, user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -29,8 +29,8 @@ export function Header({ chatOpen = false, onToggleChat }: { chatOpen?: boolean;
       </nav>
       {status === 'authenticated' && user && (
         <div className="user">
-          {onToggleChat && (
-            <button type="button" onClick={onToggleChat} aria-expanded={chatOpen} className={chatOpen ? 'primary' : undefined}>
+          {onToggleChatbot && (
+            <button type="button" onClick={onToggleChatbot} aria-expanded={chatbotOpen} className={chatbotOpen ? 'primary' : undefined}>
               AI 챗봇
             </button>
           )}

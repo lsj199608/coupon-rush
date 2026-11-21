@@ -14,11 +14,11 @@ import java.util.UUID;
  * (조건부 UPDATE). 그래서 이 메시지에는 "몇 번째 시도인지" 같은 순서 정보가 필요 없다.
  * <p>
  * 결과에는 요청 type 을 싣지 않는다 — coupon-api 는 requestId 로 자기 DB 의 요청 행(type 포함)을 찾는다.
- * 대신 COMPLETED 결과는 내용(candidates / searchFilter / chatReply) 중 <b>정확히 하나</b>만 채운다 (생성자가 검사).
+ * 대신 COMPLETED 결과는 내용(candidates / searchFilter / chatbotReply) 중 <b>정확히 하나</b>만 채운다 (생성자가 검사).
  *
  * @param schemaVersion {@link LlmTopics#SCHEMA_VERSION}
  * @param requestId     요청의 requestId
- * @param status        COMPLETED 면 candidates / searchFilter / chatReply 중 하나, FAILED 면 failureReason 만 있다
+ * @param status        COMPLETED 면 candidates / searchFilter / chatbotReply 중 하나, FAILED 면 failureReason 만 있다
  * @param candidates    EVENT_COPY 의 생성 후보 1~{@value #CANDIDATE_COUNT}개 (그 외에는 빈 목록)
  * @param searchFilter  EVENT_SEARCH 의 검색 조건 (그 외에는 null. 필드 추가 — 이전 메시지에는 없어서 null 로 읽힌다)
  * @param failureReason FAILED 사유 (COMPLETED 면 null)
@@ -28,7 +28,7 @@ import java.util.UUID;
  * @param cached        응답 캐시에서 꺼낸 결과인가 (LLM 호출 0회)
  * @param latencyMs     llm-service 가 메시지를 받고 결과를 만들기까지 걸린 시간
  * @param completedAt   결과를 만든 시각
- * @param chatReply     CHAT 의 답변 (그 외에는 null. 필드 추가 — 끝에 둬서 기존 필드 순서를 바꾸지 않는다)
+ * @param chatbotReply     CHATBOT 의 답변 (그 외에는 null. 필드 추가 — 끝에 둬서 기존 필드 순서를 바꾸지 않는다)
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record LlmResultMessage(
@@ -44,7 +44,7 @@ public record LlmResultMessage(
         boolean cached,
         long latencyMs,
         Instant completedAt,
-        ChatReply chatReply
+        ChatbotReply chatbotReply
 ) {
 
     /** 한 번에 만드는 후보 수 */
@@ -61,7 +61,7 @@ public record LlmResultMessage(
         if (candidates.size() > CANDIDATE_COUNT) {
             throw new IllegalArgumentException("후보는 최대 " + CANDIDATE_COUNT + "개입니다");
         }
-        int contents = (candidates.isEmpty() ? 0 : 1) + (searchFilter != null ? 1 : 0) + (chatReply != null ? 1 : 0);
+        int contents = (candidates.isEmpty() ? 0 : 1) + (searchFilter != null ? 1 : 0) + (chatbotReply != null ? 1 : 0);
         switch (status) {
             case COMPLETED -> {
                 if (contents != 1) {
@@ -101,7 +101,7 @@ public record LlmResultMessage(
     }
 
     /** 챗봇 답변. 캐시하지 않으므로 cached 는 항상 false */
-    public static LlmResultMessage chatCompleted(UUID requestId, ChatReply reply, String model,
+    public static LlmResultMessage chatbotCompleted(UUID requestId, ChatbotReply reply, String model,
                                                  int inputTokens, int outputTokens, long latencyMs, Instant completedAt) {
         Objects.requireNonNull(reply, "reply");
         return new LlmResultMessage(LlmTopics.SCHEMA_VERSION, requestId, LlmResultStatus.COMPLETED, List.of(), null, null,

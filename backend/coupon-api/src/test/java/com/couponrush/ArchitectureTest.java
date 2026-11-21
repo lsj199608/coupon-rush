@@ -23,7 +23,7 @@ class ArchitectureTest {
     static final ArchRule 쿠폰_패키지는_LLM_과_자연어_검색과_챗봇에_의존하지_않는다 = noClasses()
             .that().resideInAPackage("com.couponrush.coupon..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "com.couponrush.llm..", "com.couponrush.search..", "com.couponrush.chat..")
+                    "com.couponrush.llm..", "com.couponrush.search..", "com.couponrush.chatbot..")
             .because("발급 경로에 LLM 을 넣지 않는다. 검색 조건도 coupon 패키지 표현(CouponSearchCondition)으로 받는다");
 
     /** 2026-11-16 정리의 요점: 재고는 발급 전용이 아니다. 형제 기능이 발급 구현 내부에 의존하지 않는다 */
@@ -33,17 +33,17 @@ class ArchitectureTest {
             .should().dependOnClassesThat().resideInAPackage("com.couponrush.coupon.issue..")
             .because("재고 저장소는 목록 조회·대조 점검·발급이 함께 쓰는 아래 층이다");
 
-    /** 의존 방향: search·chat → llm, search → coupon. llm 은 요청·결과를 다루는 기반이라 기능(검색·챗봇·쿠폰)을 모른다 */
+    /** 의존 방향: search·chatbot → llm, search → coupon. llm 은 요청·결과를 다루는 기반이라 기능(검색·챗봇·쿠폰)을 모른다 */
     @ArchTest
     static final ArchRule LLM_요청_패키지는_검색과_챗봇과_쿠폰을_모른다 = noClasses()
             .that().resideInAPackage("com.couponrush.llm..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "com.couponrush.search..", "com.couponrush.chat..", "com.couponrush.coupon..");
+                    "com.couponrush.search..", "com.couponrush.chatbot..", "com.couponrush.coupon..");
 
     /** 메시지 계약(llm-contract)은 LLM 을 쓰는 패키지만 안다 — 회원·인증·쿠폰에 퍼지지 않게 */
     @ArchTest
-    static final ArchRule LLM_계약은_llm_search_chat_만_쓴다 = noClasses()
-            .that().resideOutsideOfPackages("com.couponrush.llm..", "com.couponrush.search..", "com.couponrush.chat..")
+    static final ArchRule LLM_계약은_llm_search_chatbot_만_쓴다 = noClasses()
+            .that().resideOutsideOfPackages("com.couponrush.llm..", "com.couponrush.search..", "com.couponrush.chatbot..")
             .should().dependOnClassesThat().resideInAPackage("com.couponrush.llm.contract..");
 
     /** 에러 공통 계층은 가장 아래 — 기능 패키지를 참조하면 모든 기능이 서로 엮인다 */
@@ -52,11 +52,11 @@ class ArchitectureTest {
             .that().resideInAPackage("com.couponrush.global.error..")
             .should().dependOnClassesThat().resideInAnyPackage(
                     "com.couponrush.auth..", "com.couponrush.user..", "com.couponrush.coupon..",
-                    "com.couponrush.llm..", "com.couponrush.search..", "com.couponrush.chat..");
+                    "com.couponrush.llm..", "com.couponrush.search..", "com.couponrush.chatbot..");
 
     /** 챗봇은 검색 패키지를 직접 쓰지 않는다 — 챗봇의 검색은 C2 에서 mcp-server 도구(search_events)를 거친다 */
     @ArchTest
     static final ArchRule 챗봇은_검색_패키지를_직접_쓰지_않는다 = noClasses()
-            .that().resideInAPackage("com.couponrush.chat..")
+            .that().resideInAPackage("com.couponrush.chatbot..")
             .should().dependOnClassesThat().resideInAPackage("com.couponrush.search..");
 }

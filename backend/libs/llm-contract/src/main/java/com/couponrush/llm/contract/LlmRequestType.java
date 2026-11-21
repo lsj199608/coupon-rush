@@ -10,8 +10,8 @@ public enum LlmRequestType {
      */
     EVENT_SEARCH,
     /**
-     * 챗봇 질문 (7단계 C) — 입력은 {@link LlmRequestMessage#chat()}, 결과는 {@link LlmResultMessage#chatReply()}.
+     * 챗봇 질문 (7단계 C) — 입력은 {@link LlmRequestMessage#chatbot()}, 결과는 {@link LlmResultMessage#chatbotReply()}.
      * 로그인한 회원만 (requestedBy ≥ 1, 생성자가 검사). 소비자(llm-service)부터 배포한다
      */
-    CHAT
+    CHATBOT
 }

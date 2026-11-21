@@ -61,7 +61,7 @@ public class LlmResultHandler {
     private String toJson(LlmResultMessage message) {
         try {
             Object content = message.searchFilter() != null ? message.searchFilter()
-                    : message.chatReply() != null ? message.chatReply()
+                    : message.chatbotReply() != null ? message.chatbotReply()
                     : message.candidates();
             return objectMapper.writeValueAsString(content);
         } catch (JsonProcessingException e) {

@@ -138,7 +138,7 @@ app:
       request-timeout: 15s                        # 검색창이라 짧게. 넘으면 키워드 검색 결과
       per-minute: 10                              # 회원별, 비로그인은 IP별
       per-day: 100
-    chat:                                         # 챗봇 (7단계 C, 로그인 필요). 문구 생성·검색과 한도 카운터가 따로다
+    chatbot:                                         # 챗봇 (7단계 C, 로그인 필요). 문구 생성·검색과 한도 카운터가 따로다
       request-timeout: 60s                        # 도구를 여러 번 부를 수 있어(C2) 검색보다 길다
       per-minute: 5                               # 회원별
       per-day: 50

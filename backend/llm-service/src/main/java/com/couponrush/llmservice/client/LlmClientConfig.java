@@ -1,9 +1,9 @@
 package com.couponrush.llmservice.client;
 
 import com.couponrush.llmservice.LlmServiceProperties;
-import com.couponrush.llmservice.chat.model.ChatModel;
-import com.couponrush.llmservice.chat.model.FakeChatModel;
-import com.couponrush.llmservice.client.anthropic.AnthropicChatModel;
+import com.couponrush.llmservice.chatbot.model.ChatbotModel;
+import com.couponrush.llmservice.chatbot.model.FakeChatbotModel;
+import com.couponrush.llmservice.client.anthropic.AnthropicChatbotModel;
 import com.couponrush.llmservice.client.anthropic.AnthropicLlmClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -48,11 +48,11 @@ public class LlmClientConfig {
      * 챗봇 판단도 같은 제공자로 — Anthropic 이면 같은 클라이언트(재시도·서킷 브레이커 공유)로 tool use, 아니면 fake 규칙.
      */
     @Bean
-    public ChatModel chatModel(LlmClient llmClient, LlmServiceProperties properties) {
+    public ChatbotModel chatbotModel(LlmClient llmClient, LlmServiceProperties properties) {
         if (llmClient instanceof AnthropicLlmClient anthropic) {
-            return new AnthropicChatModel(anthropic, properties.chat());
+            return new AnthropicChatbotModel(anthropic, properties.chatbot());
         }
-        return new FakeChatModel();
+        return new FakeChatbotModel();
     }
 
     public static Provider choose(String provider, String apiKey) {

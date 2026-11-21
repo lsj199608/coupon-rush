@@ -1,0 +1,22 @@
+// 이벤트별 실시간 채팅방 (7단계 D). 사람 ↔ 사람 대화 — WebSocket + STOMP.
+// coupon-api 안에 두지 않는 이유: WebSocket 은 연결을 오래 쥔다(스레드·메모리·파일 핸들).
+// 선착순 오픈 순간 채팅 접속이 몰려도 발급 서비스의 자원을 쓰지 않게 프로세스를 나눈다 (llm-service·mcp-server 와 같은 원칙).
+// 다른 모듈에 의존하지 않는다. DB 없음 (D5 에서 최근 메시지만 Redis 에 보관할 예정).
+plugins {
+	id 'org.springframework.boot'
+	id 'io.spring.dependency-management'
+}
+
+dependencies {
+	// spring-websocket + spring-messaging(STOMP, 단순 브로커) + 내장 Tomcat
+	implementation 'org.springframework.boot:spring-boot-starter-websocket'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'org.awaitility:awaitility'   // 구독이 서버에 등록될 때까지 대기
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}

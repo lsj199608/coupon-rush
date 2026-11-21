@@ -22,7 +22,7 @@ import java.util.UUID;
  * @param regenerate    true 면 응답 캐시를 건너뛰고 새로 생성 ("다시 생성" 버튼)
  * @param eventCopy     type = EVENT_COPY 일 때의 입력
  * @param eventSearch   type = EVENT_SEARCH 일 때의 입력 (필드 추가 — 이전 메시지에는 없어서 null 로 읽힌다)
- * @param chat          type = CHAT 일 때의 입력 (필드 추가)
+ * @param chatbot          type = CHATBOT 일 때의 입력 (필드 추가)
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record LlmRequestMessage(
@@ -35,7 +35,7 @@ public record LlmRequestMessage(
         boolean regenerate,
         EventCopyInput eventCopy,
         EventSearchInput eventSearch,
-        ChatInput chat
+        ChatbotInput chatbot
 ) {
 
     public LlmRequestMessage {
@@ -47,15 +47,15 @@ public record LlmRequestMessage(
             throw new IllegalArgumentException("deadline 은 requestedAt 보다 뒤여야 합니다");
         }
         // 입력이 여러 개면 어느 쪽을 처리할지 모호하다 → 받는 순간 거절 (LLM 을 부르기 전에)
-        int inputs = (eventCopy != null ? 1 : 0) + (eventSearch != null ? 1 : 0) + (chat != null ? 1 : 0);
+        int inputs = (eventCopy != null ? 1 : 0) + (eventSearch != null ? 1 : 0) + (chatbot != null ? 1 : 0);
         switch (type) {
             case EVENT_COPY -> requireOnly(eventCopy != null, inputs, "EVENT_COPY", "eventCopy");
             case EVENT_SEARCH -> requireOnly(eventSearch != null, inputs, "EVENT_SEARCH", "eventSearch");
-            case CHAT -> {
-                requireOnly(chat != null, inputs, "CHAT", "chat");
+            case CHATBOT -> {
+                requireOnly(chatbot != null, inputs, "CHATBOT", "chatbot");
                 // 챗봇은 "내 쿠폰"을 조회할 수 있다 → 누구인지가 반드시 있어야 한다 (비로그인 0 금지)
                 if (requestedBy < 1) {
-                    throw new IllegalArgumentException("CHAT 요청은 회원(requestedBy ≥ 1)만 보낼 수 있습니다");
+                    throw new IllegalArgumentException("CHATBOT 요청은 회원(requestedBy ≥ 1)만 보낼 수 있습니다");
                 }
             }
         }
@@ -82,9 +82,9 @@ public record LlmRequestMessage(
      * 챗봇 질문 (현재 버전). regenerate 는 항상 false — 챗봇 답은 캐시하지 않는다
      * (지난 대화·"내 쿠폰"처럼 사람과 시점마다 달라지는 조회 결과에 기대므로 같은 문장이라도 같은 답이 아니다).
      */
-    public static LlmRequestMessage chat(UUID requestId, long requestedBy, Instant requestedAt, Instant deadline,
-                                         ChatInput input) {
-        return new LlmRequestMessage(LlmTopics.SCHEMA_VERSION, requestId, LlmRequestType.CHAT,
+    public static LlmRequestMessage chatbot(UUID requestId, long requestedBy, Instant requestedAt, Instant deadline,
+                                         ChatbotInput input) {
+        return new LlmRequestMessage(LlmTopics.SCHEMA_VERSION, requestId, LlmRequestType.CHATBOT,
                 requestedBy, requestedAt, deadline, false, null, null, input);
     }
 
