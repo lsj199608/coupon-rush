@@ -195,6 +195,48 @@ Start-Sleep 2; Invoke-RestMethod "http://localhost:8080/api/chat/sessions/$($s.s
 
 fake 검색은 정해진 표현만 알아듣는다 — "커피쿠폰"(붙여 쓰기), "진행"(한 단어)은 검색어로 남아 0건이 정상 ("커피 쿠폰", "진행 중인 커피 쿠폰"으로).
 
+### K. MCP 서버 ↔ Claude Code (7단계 B3 — 사람 인증 경로)
+
+준비: `docker compose up -d` + bootRun 3개(`:coupon-api`, `:llm-service`(검색 AI 경로용), `:mcp-server`) + `npm run dev`.
+`infra/.env`의 `MCP_SERVICE_TOKEN`·`INTERNAL_API_TOKEN`은 K9의 200 확인에만 필요 (사람 경로는 Bearer 를 그대로 넘김).
+access token: 브라우저 로그인 → F12 Network → `refresh` 응답의 `accessToken` (30분 유효).
+
+```powershell
+# 이 작업 중인 세션이 아니라 새 터미널에서. 예전 등록이 있으면 먼저 claude mcp remove coupon-rush
+claude mcp add --transport http coupon-rush http://localhost:8082/mcp --header "Authorization: Bearer <access token>"
+claude mcp list     # coupon-rush: ✓ Connected
+claude              # 새 세션 → /mcp 로 도구 3개 확인
+```
+
+| # | Claude Code에 할 말 / 조작 | 기대 |
+|---|---|---|
+| K1 | "내가 받은 쿠폰 보여줘" | get_my_coupons → 웹 "내 쿠폰"과 같은 목록·개수 |
+| K2 | "진행 중인 커피 쿠폰 있어?" | search_events → searchMethod AI_FILTER + 이벤트 url |
+| K3 | "N번 이벤트 자세히" | get_event → 상태·수량·기간(KST)·url |
+| K4 | "커피 쿠폰 발급해줘" | 발급 도구 없음 → url 안내만 (발급 이력 그대로) |
+| K5 | "3번 회원 쿠폰 보여줘" | 도구에 인자가 없어 내 쿠폰만 |
+| K6 | `redis-cli --scan --pattern "llm:search-rate:*"` | `user:{내 ID}` 키 (Bearer 로 회원별 한도) |
+| K7 | 브라우저 로그아웃 → "내 쿠폰" | "로그인이 필요합니다: …" + 토큰 넣는 법 (블랙리스트 토큰), 검색은 계속 됨 |
+| K8 | remove 후 헤더 없이 add → "내 쿠폰" | coupon-api 호출 없이 "로그인이 필요합니다" 도구 오류, 검색·상세 정상 |
+
+K9 — 헤더 거절 (curl, initialize 요청):
+```powershell
+$init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
+[IO.File]::WriteAllText("$PWD\init.json", $init)
+$acc = 'Accept: application/json, text/event-stream'
+curl.exe -s -i http://localhost:8082/mcp -H $acc -H "Content-Type: application/json" --data-binary "@init.json" <아래 헤더>
+```
+| 헤더 | 기대 |
+|---|---|
+| `X-Mcp-Service-Token: wrong` + `X-Mcp-User-Id: 1` | 401 |
+| `X-Mcp-User-Id: 1` 만 | 401 |
+| 맞는 서비스 토큰 + `X-Mcp-User-Id: abc` | 400 |
+| 맞는 서비스 토큰 + 사용자 ID + `Authorization: Bearer x` | 400 |
+| 맞는 서비스 토큰 + `X-Mcp-User-Id: 1` | 200 + Mcp-Session-Id |
+| (coupon-api) `GET /internal/users/1/coupons` + 사용자 Bearer | 403 |
+
+끝나면 `init.json` 삭제, `claude mcp remove coupon-rush` (만료 토큰이 설정에 남지 않게).
+
 ---
 
 ## 3. 문제가 생겼을 때 볼 곳
@@ -230,3 +272,4 @@ fake 검색은 정해진 표현만 알아듣는다 — "커피쿠폰"(붙여 쓰
 | H 실제 Claude (선택) | 미실행 | 비용 때문에 생략 — 실제 API 호출은 아직 확인 안 됨 |
 | I 챗봇 (I1~I7) |✓ | 2026-11-19 fake 제공자. bootRun 3개 + PowerShell 스크립트(로컬 JWT). 답 0.8~2.3초, 챗봇 안 검색은 AI 검색 경로(전용 토픽 효과) |
 | J 챗봇 창 (J1~J4) |✓ | 2026-11-20 브라우저 확인. fake 검색 한계("커피쿠폰"·"진행" 0건)는 고치지 않기로 |
+| K MCP 서버 ↔ Claude Code (K1~K9) |✓ | 2026-11-21 Bearer 연결로 도구 3개·로그아웃 토큰·헤더 없음·헤더 거절(401/400/200/403) 확인 |

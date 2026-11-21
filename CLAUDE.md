@@ -133,7 +133,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           사람 = Authorization: Bearer → coupon-api /api/users/me/coupons에 그대로 전달 / 서버(C2 챗봇) = X-Mcp-Service-Token + X-Mcp-User-Id
           → coupon-api 내부 API GET /internal/users/{id}/coupons(X-Internal-Token, ROLE_INTERNAL_SERVICE). 새 env MCP_SERVICE_TOKEN·INTERNAL_API_TOKEN
           — 아래 "MCP 서버" 메모의 "인증 (B2)". 테스트: McpToolsTest(get_my_coupons·연결 인증), InternalApiTest
-    - [ ] B3) 수동 확인: Claude Code에 MCP 서버 연결해 도구 호출
+    - [x] B3) 수동 확인 2026-11-21 (docs/manual-check.md K1~K9): Claude Code에 Bearer 헤더로 연결 → get_my_coupons(웹 내 쿠폰과 일치)·
+          search_events(AI_FILTER, 회원별 검색 한도)·get_event·발급은 링크 안내·남의 쿠폰 요청 무시, 로그아웃 토큰·헤더 없음 → "로그인이 필요합니다",
+          헤더 거절 curl(틀린 서비스 토큰·ID만 401, 잘못된 ID·Bearer 동시 400, 정상 200, 내부 API에 사용자 JWT 403)
     - [x] C1) 대화 저장 + 질문 API — 아래 "챗봇 대화 (7단계 C1, coupon-api)" 메모. V8 chat_sessions / chat_turns(턴 = 질문 + LLM 요청, 답은 llm_requests에만),
           POST /api/chat/sessions/{id}/turns(202 + 폴링), 방마다 대기 중 질문 1개(409), 한도 분 5·일 50(별도 카운터), 최근 답 받은 10턴을 history로.
           계약: LlmRequestType.CHAT(회원만), ChatInput / ChatTurn / ChatReply. (C1 당시 llm-service는 임시 고정 답변 → C2에서 실제 챗봇으로 교체)
