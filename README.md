@@ -152,7 +152,7 @@ Claude Code에서 내 쿠폰까지 쓰려면 access token(30분)을 연결 설�
 
 ### 2-3. (선택, 개발 중) 채팅 서버: web-chat-service (8083)
 
-같은 이벤트 페이지를 보는 사람끼리 대화하는 WebSocket(STOMP) 서버입니다. 환경변수는 없습니다.
+같은 이벤트 페이지를 보는 사람끼리 대화하는 WebSocket(STOMP) 서버입니다. Redis가 필요하고(`REDIS_HOST`·`REDIS_PORT`, coupon-api와 같은 값), 새 환경변수는 없습니다.
 
 ```powershell
 cd backend
@@ -160,8 +160,9 @@ cd backend
 ```
 
 - 방 = 이벤트: 구독 `/topic/events/{id}`, 보내기 `/app/events/{id}/chat` (`{"content": "..."}`, 500자), 내 메시지 거절 사유 `/user/queue/errors`.
-- 지금은 **읽기만 됩니다** — 보내기는 로그인 연결 인증(1회용 티켓, 다음 단계)이 붙은 뒤부터 동작합니다.
-- 보낸 사람은 서버가 정하고, 회원마다 10초에 5개까지 보낼 수 있습니다. 허용한 Origin(`http://localhost:5173`)의 브라우저만 연결됩니다.
+- **보내려면 로그인 연결**: coupon-api `POST /api/web-chat/tickets`(로그인)로 1회용 티켓(30초)을 받아 STOMP CONNECT의 `ticket` 헤더에 넣습니다.
+  티켓 없이 연결하면 읽기만 되고, 만료·재사용된 티켓은 연결이 거절됩니다. 다시 연결할 때마다 새 티켓을 받습니다. (화면 연동은 다음 단계)
+- 보낸 사람·닉네임은 서버가 티켓으로 정하고, 회원마다 10초에 5개까지 보낼 수 있습니다. 허용한 Origin(`http://localhost:5173`)의 브라우저만 연결됩니다.
 
 ### 3. 프론트엔드: Vite (5173)
 
@@ -215,7 +216,7 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 |---|---|---|
 | `POSTGRES_HOST` | `localhost` | DB 호스트 |
 | `POSTGRES_PORT` | `5432` | DB 포트. compose가 여는 호스트 포트도 이 값 |
-| `REDIS_HOST` | `localhost` | Redis 호스트 |
+| `REDIS_HOST` | `localhost` | Redis 호스트 (coupon-api·llm-service·web-chat-service가 같은 Redis) |
 | `REDIS_PORT` | `6379` | Redis 포트. compose가 여는 호스트 포트도 이 값 |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka 브로커 주소 |
 | `JWT_ACCESS_TOKEN_VALIDITY` | `30m` | access token 유효기간 |
@@ -271,6 +272,7 @@ backend/   Gradle 멀티모듈 루트
   mcp-server/   AI 클라이언트용 MCP 도구 서버 (coupon-api 조회 API 어댑터, DB 없음)
   web-chat-service/ 이벤트별 실시간 채팅방 (WebSocket + STOMP, DB 없음)
   libs/llm-contract/  두 서비스가 주고받는 Kafka 메시지 계약
+  libs/web-chat-contract/  coupon-api ↔ web-chat-service 채팅 연결 티켓 계약 (Redis 키·값 모양)
 frontend/  React (src/{api, hooks, components, pages, auth, utils})
 infra/     docker-compose.yml, .env.example
 docs/      동시성·Redis·Kafka 설계와 측정 기록

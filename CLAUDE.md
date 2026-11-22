@@ -159,11 +159,16 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
     - [x] D1) web-chat-service 모듈(8083): Spring WebSocket + STOMP(SockJS 없음, 단순 브로커), 이벤트별 방 /topic/events/{id}, 보내기 /app/events/{id}/chat,
           메시지 500자(코드 포인트)·회원별 도배 제한(10초 5개, 미끄러지는 창, 탭 합산), 거절 사유 /user/queue/errors(연결 유지) /
           주소 위반·비로그인 보내기는 ERROR 프레임 + 연결 종료, Origin 허용 목록, 프레임 8KB·느린 클라이언트 제한, 하트비트 10초.
-          인증은 WebChatAuthenticator 인터페이스만 — D1 기본은 전원 비로그인(읽기만), 보내기는 D2 티켓부터 실제 동작 — 아래 "채팅 서버 (D1)" 메모.
-          테스트: WebChatRoomTest(14, 실제 STOMP 클라이언트 + 테스트용 인증기)·WebChatServiceTest·WebChatRateLimiterTest·WebChatRulesTest. bootRun 기동·헬스·Origin 403 확인
+          D1 당시 인증은 인터페이스만(전원 비로그인) → D2에서 티켓 인증 — 아래 "채팅 서버 (D1)" 메모.
+          테스트: WebChatRoomTest(실제 STOMP 클라이언트)·WebChatServiceTest·WebChatRateLimiterTest·WebChatRulesTest. bootRun 기동·헬스·Origin 403 확인
           (2026-11-21 이름 정리로 chat-service → web-chat-service, 컨트롤러/서비스 분리 — 공통 메모 "이름 규칙")
-    - [ ] D2) 인증: coupon-api POST /api/web-chat/tickets(로그인, 패키지 com.couponrush.webchat) → 30초 1회용 티켓(Redis) → web-chat-service가 STOMP CONNECT에서 확인 후 삭제.
-          보낸 사람·닉네임은 서버가 정함(사칭 불가). 재사용·만료 티켓 거절
+    - [x] D2) 연결 인증 — 아래 "채팅 연결 티켓 (D2)" 메모. coupon-api POST /api/web-chat/tickets(로그인, 패키지 com.couponrush.webchat)
+          → 무작위 32바이트(base64url 43자) → Redis web-chat:ticket:{SHA-256} = {userId, nickname, issuedAt}, 30초, no-store 응답
+          → web-chat-service가 STOMP CONNECT ticket 헤더로 GETDEL(1회용, 원자적) → 그 회원으로 연결. 티켓 없음 = 비로그인(읽기만),
+          없는·만료·재사용·형식 오류·깨진 내용 = ERROR WEB_CHAT_UNAUTHORIZED + 연결 종료. 계약 모듈 libs/web-chat-contract(키 규칙·값 모양).
+          인증 인터페이스는 구현이 하나라 없앰(WebChatTicketAuthenticator 클래스). 새 env 없음(REDIS_HOST/PORT 재사용).
+          테스트: WebChatTicketsTest(키 고정 해시·형식·JSON), WebChatTicketApiTest(7), WebChatRoomTest(18: 실제 티켓으로 연결, 재사용·없는 티켓·형식·
+          동시 8연결 중 1개만·깨진 내용), ArchitectureTest(webchat 규칙 2개). 두 서비스를 함께 띄운 실제 확인은 D4(화면)에서
     - [ ] D3) scale-out: Redis pub/sub으로 인스턴스 간 전달 — web-chat-service 2대 테스트(A 접속자 메시지가 B 접속자에게)
     - [ ] D4) 프론트: 이벤트 상세 화면 채팅 패널(@stomp/stompjs, 자동 재연결), Vite 프록시 ws: true. 브라우저 창 2개로 수동 확인
     - [ ] D5) (선택) 최근 메시지 50개 Redis 보관(입장 시 표시), 남은 수량 실시간 푸시(상세 3초 폴링 대체)
@@ -179,7 +184,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - Gradle 멀티모듈 (7단계): backend/가 루트(settings.gradle, gradlew, 공통 설정은 루트 build.gradle의 subprojects).
   모듈 의존성은 각 모듈 build.gradle에. 실행·테스트 명령은 backend/에서 `:coupon-api:bootRun`처럼 모듈을 지정한다
   (`--tests` 필터는 모든 모듈에 걸리므로 모듈 지정 필수). bootRun·test의 작업 폴더는 모듈 폴더 → .env는 ../../infra/.env.
-  모듈 간 공유는 메시지 계약(libs:llm-contract)만 — 엔티티·보안·에러 코드는 공유하지 않는다.
+  모듈 간 공유는 계약 모듈만(libs:llm-contract, libs:web-chat-contract) — 엔티티·보안·에러 코드는 공유하지 않는다.
 - 패키지 (coupon-api): com.couponrush.{auth, user, coupon, llm, search, chatbot, global(config, error)}
 - **패키지 구조 = 기능 우선(package-by-feature), 기능 안에서 계층(Controller → Service → Repository)**. 모든 모듈 같은 규칙 —
   입구(HTTP 컨트롤러 / STOMP 컨트롤러 / MCP 도구 / Kafka 리스너)는 프로토콜만, 업무 흐름은 Service. mapper 없음(JPA Repository가 그 자리).
@@ -953,7 +958,7 @@ ws /ws/web-chat (STOMP, SockJS 없음) ─▶ StompInboundGuard(입구 검사) �
 | SUBSCRIBE `/topic/events/{id}` | 누구나 (이벤트 페이지가 공개) | `WebChatMessage(messageId, eventId, senderId, senderNickname, content, sentAt)` |
 | SEND `/app/events/{id}/chat` | 로그인 연결만 | 바디 `{"content"}`만 읽음 — senderId 등 다른 필드는 무시(보낸 사람·시각·ID는 서버가 채움) |
 | SUBSCRIBE `/user/queue/errors` | 로그인 연결 | 내 메시지 거절 `{"code","message"}` (보낸 세션에만, broadcast=false) |
-- 패키지: auth/(WebChatUser = Principal, WebChatAuthenticator, AnonymousWebChatAuthenticator, StompInboundGuard), room/(WebChatController·WebChatService·메시지·도배 제한·발행), config/.
+- 패키지: auth/(WebChatUser = Principal, WebChatTicketAuthenticator(D2), StompInboundGuard), room/(WebChatController·WebChatService·메시지·도배 제한·발행), config/.
   계층: WebChatController = STOMP 입구(로그인 연결 확인 + 거절을 /user/queue/errors로), WebChatService = 도배 제한 → 본문 규칙(공백·500자) → 메시지 만들기 → 발행
   (STOMP를 몰라 연결 없이 단위 테스트 — WebChatServiceTest). WebChatSendRequest는 값만(검사는 서비스).
 - 보내기 주소 `/app/events/{id}/chat`의 chat은 그대로 둠 — /ws/web-chat 안에서만 쓰는 동작 이름이라 챗봇과 섞이지 않는다.
@@ -971,11 +976,32 @@ ws /ws/web-chat (STOMP, SockJS 없음) ─▶ StompInboundGuard(입구 검사) �
 - 보호: Origin 허용 목록(app.web-chat.allowed-origins, 위반 403 — Origin 없는 비브라우저 클라이언트는 대상 아님), 프레임 8KB(넘으면 연결 종료),
   보낼 버퍼 512KB·10초(느린 클라이언트 끊기), 하트비트 10초(브로커 스케줄러는 messageBrokerTaskScheduler를 @Lazy로 받음).
 - 이벤트가 실제로 있는지는 확인하지 않는다(DB 없음) — 없는 이벤트 방은 빈 방일 뿐. 필요하면 D2 티켓 발급 때 coupon-api가 확인.
-- **D1 기본 인증기는 전원 비로그인**(헤더로 회원 ID를 받는 개발용 인증은 두지 않음 — 켜진 채 배포되면 사칭). 실제 보내기는 D2 티켓부터.
+- 인증: D1은 전원 비로그인(헤더로 회원 ID를 받는 개발용 인증은 두지 않음 — 켜진 채 배포되면 사칭) → D2 티켓 (아래 메모).
   WebChatMessagePublisher는 D3에서 Redis pub/sub 구현으로 바꿀 경계(지금은 LocalWebChatMessagePublisher = 이 서버 브로커).
-- 테스트 WebChatRoomTest: WebSocketStompClient로 실제 연결, @Primary 테스트 인증기(CONNECT 헤더 test-user-id). 방 구독 확인은 서버 SimpMessagingTemplate로
+- 테스트 WebChatRoomTest: WebSocketStompClient로 실제 연결, 회원은 실제 티켓(테스트가 Redis(Testcontainers)에 넣음)으로. 방 구독 확인은 서버 SimpMessagingTemplate로
   표시용 메시지(probe)를 받을 때까지, 오류 큐 구독 확인은 같은 연결로 형식 오류 하나를 보내 그 거절을 받는 것으로(순서 보장 덕분).
   "안 받음"은 거절 응답을 받은 시점에 확인(거절은 브로커 전에 끝남) — sleep은 "다른 탭에 안 감" 300ms 하나뿐. 테스트마다 새 회원 ID(도배 상태가 컨텍스트에 남음).
+
+### 채팅 연결 티켓 (7단계 D2) — coupon-api com.couponrush.webchat + web-chat-service auth/ + libs/web-chat-contract
+```
+브라우저 ① POST /api/web-chat/tickets (로그인, coupon-api) → 200 {ticket, expiresAt}, Cache-Control: no-store
+           coupon-api: 무작위 32바이트(SecureRandom, base64url 43자) → SET NX web-chat:ticket:{SHA-256(티켓)} = WebChatTicket JSON, EX 30s
+        ② ws /ws/web-chat + STOMP CONNECT (ticket 헤더) → web-chat-service: GETDEL → 있으면 WebChatUser(userId, nickname)로 연결
+```
+| Redis 키 | 쓰는 쪽 | 내용 |
+|---|---|---|
+| `web-chat:ticket:{sha256}` | coupon-api 생성 / web-chat-service 꺼내며 삭제 | `{userId, nickname, issuedAt}`, TTL 30초 |
+- **왜 티켓인가**: 브라우저 WebSocket은 Authorization 헤더를 못 붙이고, URL에 토큰을 싣지 않는 규칙. 로그인 확인은 JWT를 아는 coupon-api가 하고,
+  web-chat-service는 JWT 비밀키도 users 테이블도 모른다(비밀값·데이터를 나누지 않음). 보낸 사람·닉네임은 티켓에 담겨 사칭 불가, 닉네임은 발급 시점 값.
+- **1회용 = GETDEL**(꺼내면서 지우기, 원자적): GET 후 DEL로 나누면 같은 티켓 동시 연결이 둘 다 통과할 수 있다 — 동시 8연결 중 1개만 성공을 테스트로 고정.
+- **키는 원문이 아니라 SHA-256 해시**(refresh token과 같은 방식): Redis 내용이 새도 쓸 수 있는 티켓이 없다. 짧은 TTL(30초)도 같은 이유.
+- 형식(base64url 43자)이 아니면 Redis를 보기 전에 거절(긴 헤더로 해시 계산을 시키지 못하게). 키 규칙·값 모양은 계약 모듈 하나(WebChatTickets·WebChatTicket) —
+  키 규칙은 밖에서 계산한 해시 값으로 고정(WebChatTicketsTest), 값은 필드 추가만(ignoreUnknown).
+- 잘못된 티켓을 비로그인으로 낮춰 받지 않는다 — 연결을 거절해(WEB_CHAT_UNAUTHORIZED) 화면이 새 티켓으로 다시 연결하게(D4). 재연결도 매번 새 티켓.
+  티켓 내용을 못 읽으면(계약 불일치) ERROR 로그 + 같은 거절. Redis 장애 = 확인할 수 없으니 WEB_CHAT_ERROR로 연결 종료.
+- coupon-api: 회원이 없으면 404 USER_NOT_FOUND, Redis 저장 실패는 503 WEB_CHAT_TICKET_UNAVAILABLE. /api/web-chat/** 는 기본 규칙(로그인 필요)이라 SecurityConfig에 따로 없다.
+  구조 규칙(ArchitectureTest): webchat → coupon·llm·search·chatbot 금지, web-chat-contract는 webchat 패키지만.
+- 한계: 티켓 발급 횟수 제한 없음(로그인 회원만, 30초 뒤 사라짐 — 남용이 보이면 회원별 분당 한도). 티켓이 이벤트(방)에 묶이지 않음(연결 하나로 여러 방 구독 가능).
 
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)
@@ -983,7 +1009,7 @@ ws /ws/web-chat (STOMP, SockJS 없음) ─▶ StompInboundGuard(입구 검사) �
 - llm-service 실행(선택, 문구 생성용): 컨테이너 `cd infra; docker compose --profile llm up -d --build` (로그 `docker logs -f coupon-rush-llm-service`)
   또는 호스트 `cd backend; .\gradlew :llm-service:bootRun` → 8081 (fake 제공자). 둘 중 하나만
 - MCP 서버 실행: `cd backend; .\gradlew :mcp-server:bootRun` → http://localhost:8082/mcp (coupon-api 8080이 떠 있어야 도구가 동작)
-- 채팅 서버 실행: `cd backend; .\gradlew :web-chat-service:bootRun` → ws://localhost:8083/ws/web-chat (D1은 읽기만 — 보내기는 D2 티켓 인증부터)
+- 채팅 서버 실행: `cd backend; .\gradlew :web-chat-service:bootRun` → ws://localhost:8083/ws/web-chat (Redis 필요. 보내기는 coupon-api 티켓으로 연결한 회원만, 화면 연동은 D4)
 - 수동 확인 절차: docs/manual-check.md (로그인·발급·관리자·AI 문구·장애 격리·예산·모바일, 기록표 포함)
 - 하루 LLM 사용량: `docker exec coupon-rush-redis redis-cli HGETALL "llm:usage:$((Get-Date).ToString('yyyyMMdd'))"`
 - 전체 테스트: `cd backend; .\gradlew test` (모든 모듈). 한 모듈만: `.\gradlew :coupon-api:test`

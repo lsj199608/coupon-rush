@@ -6,11 +6,14 @@ rootProject.name = 'coupon-rush'
 //   llm-contract : 두 서비스가 주고받는 Kafka 메시지 계약 (폴더는 libs/llm-contract)
 //   mcp-server   : AI 클라이언트용 MCP 도구 서버 (7단계 B) — coupon-api 조회 API 를 부르는 어댑터, 도메인 로직·DB 없음
 //   web-chat-service : 이벤트별 실시간 채팅방 (사람 ↔ 사람) (7단계 D, WebSocket + STOMP) — 연결을 오래 쥐는 기능을 발급 서비스와 분리
+//   web-chat-contract: coupon-api ↔ web-chat-service 채팅 연결 티켓 계약 (Redis 키·값 모양, 폴더는 libs/web-chat-contract)
 include 'coupon-api'
 include 'llm-service'
 include 'llm-contract'
 include 'mcp-server'
 include 'web-chat-service'
+include 'web-chat-contract'
 
 // libs/ 아래에 두되 프로젝트 경로는 :llm-contract (include 'libs:llm-contract' 로 하면 빈 :libs 프로젝트가 하나 더 생긴다)
 project(':llm-contract').projectDir = file('libs/llm-contract')
+project(':web-chat-contract').projectDir = file('libs/web-chat-contract')

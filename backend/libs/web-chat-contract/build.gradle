@@ -1,0 +1,28 @@
+// coupon-api ↔ web-chat-service 채팅 연결 티켓 계약 (7단계 D2). Spring 에 의존하지 않는 순수 Java 라이브러리.
+// 티켓을 만드는 쪽(coupon-api)과 확인하는 쪽(web-chat-service)이 Redis 키 규칙·값 모양을 이 모듈 하나로 함께 쓴다
+// — 한쪽만 바뀌면 컴파일·테스트에서 걸린다 (llm-contract 의 LlmUsageKeys 와 같은 방식).
+plugins {
+	id 'java-library'
+	id 'io.spring.dependency-management'
+}
+
+dependencyManagement {
+	imports {
+		mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES
+	}
+}
+
+dependencies {
+	// @JsonIgnoreProperties 만 쓴다. 직렬화 자체(ObjectMapper)는 각 서비스의 Spring Boot 설정이 한다
+	api 'com.fasterxml.jackson.core:jackson-annotations'
+
+	testImplementation 'org.junit.jupiter:junit-jupiter'
+	testImplementation 'org.assertj:assertj-core'
+	testImplementation 'com.fasterxml.jackson.core:jackson-databind'
+	testImplementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}

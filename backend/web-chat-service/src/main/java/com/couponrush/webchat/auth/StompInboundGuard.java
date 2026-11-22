@@ -22,7 +22,7 @@ import java.nio.charset.StandardCharsets;
 /**
  * 클라이언트에서 들어오는 모든 STOMP 프레임의 입구 검사 (브로커·컨트롤러보다 먼저).
  * <ul>
- *   <li>CONNECT: {@link WebChatAuthenticator} 로 회원을 정해 세션 Principal 로 둔다</li>
+ *   <li>CONNECT: {@link WebChatTicketAuthenticator}(ticket 헤더) 로 회원을 정해 세션 Principal 로 둔다</li>
  *   <li>SUBSCRIBE: 방(/topic/events/{id})과 내 오류(/user/queue/errors)만</li>
  *   <li>SEND: /app/events/{id}/chat 만, 로그인 연결만</li>
  * </ul>
@@ -38,11 +38,11 @@ public class StompInboundGuard implements ChannelInterceptor {
     private static final Logger log = LoggerFactory.getLogger(StompInboundGuard.class);
     private static final MimeType TEXT_PLAIN_UTF8 = new MimeType("text", "plain", StandardCharsets.UTF_8);
 
-    private final WebChatAuthenticator authenticator;
+    private final WebChatTicketAuthenticator authenticator;
     private final MessageChannel clientOutboundChannel;
 
     /** clientOutboundChannel 은 이 인터셉터를 등록하는 WebSocket 설정이 만드는 Bean 이라 @Lazy 로 순환을 끊는다. */
-    public StompInboundGuard(WebChatAuthenticator authenticator,
+    public StompInboundGuard(WebChatTicketAuthenticator authenticator,
                              @Lazy @Qualifier("clientOutboundChannel") MessageChannel clientOutboundChannel) {
         this.authenticator = authenticator;
         this.clientOutboundChannel = clientOutboundChannel;

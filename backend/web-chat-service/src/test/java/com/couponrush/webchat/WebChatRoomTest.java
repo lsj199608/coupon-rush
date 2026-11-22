@@ -1,10 +1,11 @@
 package com.couponrush.webchat;
 
-import com.couponrush.webchat.auth.WebChatAuthenticator;
-import com.couponrush.webchat.auth.WebChatUser;
+import com.couponrush.webchat.contract.WebChatTicket;
+import com.couponrush.webchat.contract.WebChatTickets;
 import com.couponrush.webchat.room.WebChatDestinations;
 import com.couponrush.webchat.room.WebChatMessage;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,11 +13,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.lang.Nullable;
 import org.springframework.messaging.converter.CompositeMessageConverter;
 import org.springframework.messaging.converter.MappingJackson2MessageConverter;
@@ -31,10 +30,12 @@ import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 import java.lang.reflect.Type;
+import java.security.SecureRandom;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -48,7 +49,8 @@ import static org.awaitility.Awaitility.await;
 /**
  * 실제 STOMP 클라이언트(WebSocketStompClient)로 서버에 붙어 방 구독·보내기·거절을 검증한다.
  * <p>
- * 인증은 D2 전이라 테스트용 인증기(CONNECT 의 test-user-id 헤더)로 대신한다 — 기본 인증기는 모두 비로그인이다.
+ * 회원 연결은 실제 티켓으로 한다 — coupon-api 처럼 Redis(Testcontainers)에 티켓을 넣고 CONNECT 의 ticket 헤더로 보낸다 (D2).
+ * 티켓 없이 연결하면 비로그인(읽기만).
  * 도배 제한 상태가 컨텍스트에 남으므로 테스트마다 새 회원 ID 를 쓴다.
  * <p>
  * 구독은 비동기로 등록되므로, 보내기 전에 서버에서 그 주소로 표시용 메시지(probe)를 보내 받을 때까지 기다린다.
@@ -58,11 +60,12 @@ import static org.awaitility.Awaitility.await;
         "app.web-chat.rate-limit.max-messages=3",
         "app.web-chat.rate-limit.window=1m"
 })
-@Import(WebChatRoomTest.HeaderAuthenticatorConfig.class)
+@Import(TestcontainersConfiguration.class)
 class WebChatRoomTest {
 
     private static final AtomicLong USER_IDS = new AtomicLong(1000);
     private static final String ALLOWED_ORIGIN = "http://localhost:5173";
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     @LocalServerPort
     int port;
@@ -70,19 +73,14 @@ class WebChatRoomTest {
     @Autowired
     SimpMessagingTemplate messagingTemplate;
 
+    @Autowired
+    StringRedisTemplate redisTemplate;
+
+    @Autowired
+    ObjectMapper objectMapper;
+
     private WebSocketStompClient stompClient;
     private final List<Client> clients = new ArrayList<>();
-
-    @TestConfiguration
-    static class HeaderAuthenticatorConfig {
-        /** CONNECT 헤더 test-user-id / test-nickname 으로 회원을 정한다 (테스트 전용 — 실제 앱에는 없음). */
-        @Bean
-        @Primary
-        WebChatAuthenticator headerAuthenticator() {
-            return connect -> Optional.ofNullable(connect.getFirstNativeHeader("test-user-id"))
-                    .map(id -> new WebChatUser(Long.parseLong(id), connect.getFirstNativeHeader("test-nickname")));
-        }
-    }
 
     @BeforeEach
     void setUp() {
@@ -95,6 +93,7 @@ class WebChatRoomTest {
     void tearDown() {
         clients.forEach(Client::close);
         stompClient.stop();
+        redisTemplate.delete(redisTemplate.keys("web-chat:*"));
     }
 
     @Test
@@ -260,6 +259,78 @@ class WebChatRoomTest {
         await().atMost(5, TimeUnit.SECONDS).until(() -> !client.session.isConnected());
     }
 
+    // ── 연결 티켓 (D2) ──
+
+    @Test
+    void 티켓의_회원으로_연결되고_티켓은_한_번_쓰면_사라진다() throws Exception {
+        long eventId = 91;
+        long userId = newUserId();
+        String ticket = issueTicket(userId);
+
+        Client sender = connectWithTicket(ticket, null);
+        assertThat(redisTemplate.hasKey(WebChatTickets.redisKey(ticket))).as("연결하면서 지운다(GETDEL)").isFalse();
+
+        Room room = sender.subscribeRoom(eventId);
+        sender.send(sendTo(eventId), Map.of("content", "티켓으로 왔어요"));
+        JsonNode message = room.next();
+        assertThat(message.get("senderId").asLong()).isEqualTo(userId);
+        assertThat(message.get("senderNickname").asText()).as("닉네임은 티켓에 담긴 값").isEqualTo(nickname(userId));
+
+        assertThat(connectExpectingRejection(ticket)).as("같은 티켓 재사용").isEqualTo("WEB_CHAT_UNAUTHORIZED");
+    }
+
+    @Test
+    void 없거나_만료된_티켓과_형식이_아닌_티켓은_연결을_거절한다() throws Exception {
+        byte[] bytes = new byte[WebChatTickets.RANDOM_BYTES];
+        RANDOM.nextBytes(bytes);
+        String neverIssued = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes); // 만료(TTL 지나 사라짐)와 같은 상태
+
+        assertThat(connectExpectingRejection(neverIssued)).isEqualTo("WEB_CHAT_UNAUTHORIZED");
+        assertThat(connectExpectingRejection("not-a-ticket")).isEqualTo("WEB_CHAT_UNAUTHORIZED");
+        assertThat(connectExpectingRejection("a".repeat(5000))).as("긴 헤더 — Redis 를 보기 전에 거절").isEqualTo("WEB_CHAT_UNAUTHORIZED");
+    }
+
+    @Test
+    void 같은_티켓으로_동시에_연결해도_하나만_성공한다() throws Exception {
+        String ticket = issueTicket(newUserId());
+        int attempts = 8;
+        java.util.concurrent.atomic.AtomicInteger connected = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger rejected = new java.util.concurrent.atomic.AtomicInteger();
+        List<java.util.concurrent.CompletableFuture<StompSession>> futures = new ArrayList<>();
+
+        for (int i = 0; i < attempts; i++) {
+            StompHeaders headers = new StompHeaders();
+            headers.add(WebChatTickets.CONNECT_HEADER, ticket);
+            futures.add(stompClient.connectAsync("ws://localhost:" + port + "/ws/web-chat", new WebSocketHttpHeaders(), headers,
+                    new StompSessionHandlerAdapter() {
+                        @Override
+                        public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
+                            connected.incrementAndGet();
+                        }
+
+                        @Override
+                        public void handleFrame(StompHeaders frameHeaders, Object payload) {
+                            rejected.incrementAndGet();
+                        }
+                    }));
+        }
+
+        await().atMost(10, TimeUnit.SECONDS).until(() -> connected.get() + rejected.get() == attempts);
+        assertThat(connected).as("GETDEL 은 원자적 — 꺼낸 쪽 하나만").hasValue(1);
+        futures.stream().filter(f -> f.isDone() && !f.isCompletedExceptionally())
+                .forEach(f -> clients.add(new Client(f.join(), new LinkedBlockingQueue<>())));
+    }
+
+    @Test
+    void 티켓_내용을_읽을_수_없으면_연결을_거절한다() throws Exception {
+        byte[] bytes = new byte[WebChatTickets.RANDOM_BYTES];
+        RANDOM.nextBytes(bytes);
+        String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        redisTemplate.opsForValue().set(WebChatTickets.redisKey(ticket), "{\"userId\":0}", WebChatTickets.TTL); // 계약 위반
+
+        assertThat(connectExpectingRejection(ticket)).isEqualTo("WEB_CHAT_UNAUTHORIZED");
+    }
+
     // ── 도우미 ──
 
     private static long newUserId() {
@@ -278,27 +349,63 @@ class WebChatRoomTest {
         return connect(userId, null);
     }
 
+    /** 회원이면 coupon-api 처럼 티켓을 만들어 그 티켓으로 연결한다 (null = 티켓 없이 = 비로그인). */
     private Client connect(@Nullable Long userId, @Nullable String origin) throws Exception {
+        return connectWithTicket(userId == null ? null : issueTicket(userId), origin);
+    }
+
+    /**
+     * coupon-api WebChatTicketService 와 같은 방식으로 티켓을 만든다 — 같은 계약(WebChatTickets·WebChatTicket)을 쓰므로
+     * 키·값 모양이 실제 발급과 같다. 티켓 원문을 돌려준다.
+     */
+    private String issueTicket(long userId) throws Exception {
+        byte[] bytes = new byte[WebChatTickets.RANDOM_BYTES];
+        RANDOM.nextBytes(bytes);
+        String ticket = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        redisTemplate.opsForValue().set(WebChatTickets.redisKey(ticket),
+                objectMapper.writeValueAsString(new WebChatTicket(userId, nickname(userId), Instant.now())), WebChatTickets.TTL);
+        return ticket;
+    }
+
+    private Client connectWithTicket(@Nullable String ticket, @Nullable String origin) throws Exception {
         WebSocketHttpHeaders handshake = new WebSocketHttpHeaders();
         if (origin != null) {
             handshake.setOrigin(origin);
         }
         StompHeaders connectHeaders = new StompHeaders();
-        if (userId != null) {
-            connectHeaders.add("test-user-id", userId.toString());
-            connectHeaders.add("test-nickname", nickname(userId));
+        if (ticket != null) {
+            connectHeaders.add(WebChatTickets.CONNECT_HEADER, ticket);
         }
         BlockingQueue<String> errorFrames = new LinkedBlockingQueue<>();
         StompSession session = stompClient.connectAsync("ws://localhost:" + port + "/ws/web-chat", handshake, connectHeaders,
-                new StompSessionHandlerAdapter() {
-                    @Override
-                    public void handleFrame(StompHeaders headers, Object payload) {
-                        errorFrames.add(String.valueOf(headers.getFirst("message"))); // 세션 핸들러로는 ERROR 프레임만 온다
-                    }
-                }).get(5, TimeUnit.SECONDS);
+                errorRecorder(errorFrames)).get(5, TimeUnit.SECONDS);
         Client client = new Client(session, errorFrames);
         clients.add(client);
         return client;
+    }
+
+    /**
+     * 연결이 거절될 티켓으로 CONNECT 하고 ERROR 프레임의 사유를 돌려준다.
+     * 거절되면 CONNECTED 가 오지 않아 connectAsync 가 끝나지 않으므로 기다리지 않는다 (ERROR 프레임만 본다).
+     */
+    private String connectExpectingRejection(String ticket) throws InterruptedException {
+        StompHeaders connectHeaders = new StompHeaders();
+        connectHeaders.add(WebChatTickets.CONNECT_HEADER, ticket);
+        BlockingQueue<String> errorFrames = new LinkedBlockingQueue<>();
+        stompClient.connectAsync("ws://localhost:" + port + "/ws/web-chat", new WebSocketHttpHeaders(), connectHeaders,
+                errorRecorder(errorFrames));
+        String code = errorFrames.poll(5, TimeUnit.SECONDS);
+        assertThat(code).as("연결 거절 ERROR 프레임").isNotNull();
+        return code;
+    }
+
+    private static StompSessionHandlerAdapter errorRecorder(BlockingQueue<String> errorFrames) {
+        return new StompSessionHandlerAdapter() {
+            @Override
+            public void handleFrame(StompHeaders headers, Object payload) {
+                errorFrames.add(String.valueOf(headers.getFirst("message"))); // 세션 핸들러로는 ERROR 프레임만 온다
+            }
+        };
     }
 
     private final class Client {

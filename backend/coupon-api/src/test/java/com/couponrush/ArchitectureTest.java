@@ -52,11 +52,25 @@ class ArchitectureTest {
             .that().resideInAPackage("com.couponrush.global.error..")
             .should().dependOnClassesThat().resideInAnyPackage(
                     "com.couponrush.auth..", "com.couponrush.user..", "com.couponrush.coupon..",
-                    "com.couponrush.llm..", "com.couponrush.search..", "com.couponrush.chatbot..");
+                    "com.couponrush.llm..", "com.couponrush.search..", "com.couponrush.chatbot..",
+                    "com.couponrush.webchat..");
 
     /** 챗봇은 검색 패키지를 직접 쓰지 않는다 — 챗봇의 검색은 C2 에서 mcp-server 도구(search_events)를 거친다 */
     @ArchTest
     static final ArchRule 챗봇은_검색_패키지를_직접_쓰지_않는다 = noClasses()
             .that().resideInAPackage("com.couponrush.chatbot..")
             .should().dependOnClassesThat().resideInAPackage("com.couponrush.search..");
+
+    /** 채팅방 티켓(D2)은 회원 정보만 쓴다 — 쿠폰·LLM·검색·챗봇과 엮이지 않게 (채팅은 발급과 무관한 기능) */
+    @ArchTest
+    static final ArchRule 채팅_티켓은_쿠폰_LLM_검색_챗봇에_의존하지_않는다 = noClasses()
+            .that().resideInAPackage("com.couponrush.webchat..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "com.couponrush.coupon..", "com.couponrush.llm..", "com.couponrush.search..", "com.couponrush.chatbot..");
+
+    /** 채팅 티켓 계약(web-chat-contract)은 webchat 패키지만 안다 */
+    @ArchTest
+    static final ArchRule 채팅_티켓_계약은_webchat_만_쓴다 = noClasses()
+            .that().resideOutsideOfPackage("com.couponrush.webchat..")
+            .should().dependOnClassesThat().resideInAPackage("com.couponrush.webchat.contract..");
 }

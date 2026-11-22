@@ -59,7 +59,10 @@ public enum ErrorCode {
     CHATBOT_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "질문이 너무 잦습니다. 1분 뒤에 다시 시도해 주세요."),
     CHATBOT_DAILY_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 챗봇 질문 횟수를 모두 사용했습니다. 내일 다시 시도해 주세요."),
     CHATBOT_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "오늘 AI 사용 예산을 모두 사용했습니다. 내일 다시 시도해 주세요."),
-    CHATBOT_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "질문을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    CHATBOT_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "질문을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요."),
+
+    // 채팅방 연결 티켓 (7단계 D2)
+    WEB_CHAT_TICKET_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "채팅 연결을 준비하지 못했습니다. 잠시 후 다시 시도해 주세요.");
 
     private final HttpStatus status;
     private final String message;
