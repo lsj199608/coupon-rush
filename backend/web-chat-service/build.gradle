@@ -1,7 +1,8 @@
 // 이벤트별 실시간 채팅방 (7단계 D). 사람 ↔ 사람 대화 — WebSocket + STOMP.
 // coupon-api 안에 두지 않는 이유: WebSocket 은 연결을 오래 쥔다(스레드·메모리·파일 핸들).
 // 선착순 오픈 순간 채팅 접속이 몰려도 발급 서비스의 자원을 쓰지 않게 프로세스를 나눈다 (llm-service·mcp-server 와 같은 원칙).
-// 다른 모듈 중 티켓 계약(web-chat-contract)만 의존한다. DB 없음 (D6 에서 자기 DB web_chat 예정).
+// 다른 모듈 중 티켓 계약(web-chat-contract)만 의존한다.
+// DB 는 자기 데이터베이스 web_chat 만 쓴다 (D6, 서비스마다 자기 DB) — coupon-api 의 coupon_rush 에는 접근하지 않는다.
 plugins {
 	id 'org.springframework.boot'
 	id 'io.spring.dependency-management'
@@ -16,11 +17,17 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	// 연결 티켓 확인 (GETDEL). D3 에서 서버 간 전달(pub/sub)에도 쓴다
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+	// 대화 저장 (D6): 테이블 하나에 묶음 INSERT·커서 조회뿐이라 JPA 없이 JDBC. 스키마는 자기 Flyway 로
+	implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+	implementation 'org.flywaydb:flyway-core'
+	implementation 'org.flywaydb:flyway-database-postgresql'
+	runtimeOnly 'org.postgresql:postgresql'
 
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testImplementation 'org.awaitility:awaitility'   // 구독이 서버에 등록될 때까지 대기
 	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
 	testImplementation 'org.testcontainers:junit-jupiter'
+	testImplementation 'org.testcontainers:postgresql'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

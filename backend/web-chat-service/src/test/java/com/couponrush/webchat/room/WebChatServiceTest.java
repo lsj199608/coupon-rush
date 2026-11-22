@@ -4,6 +4,7 @@ import com.couponrush.webchat.auth.WebChatUser;
 import com.couponrush.webchat.config.WebChatProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.util.unit.DataSize;
+import org.mockito.Mockito;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -14,16 +15,20 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.any;
 
-/** 보내기 규칙 — STOMP 연결 없이 (서비스는 STOMP 를 모른다). 발행은 목록에 담는 가짜. */
+/** 보내기 규칙 — STOMP 연결 없이 (서비스는 STOMP 를 모른다). 발행은 목록에 담는 가짜, 저장 대기열은 mock. */
 class WebChatServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-11-21T03:00:00Z");
     private static final WebChatUser SENDER = new WebChatUser(7, "회원7");
 
     private final List<WebChatMessage> published = new ArrayList<>();
+    private final WebChatHistoryWriter historyWriter = Mockito.mock(WebChatHistoryWriter.class);
     private final WebChatService service = new WebChatService(
-            new WebChatRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC), properties(3)), published::add,
+            new WebChatRateLimiter(Clock.fixed(NOW, ZoneOffset.UTC), properties(3)), published::add, historyWriter,
             Clock.fixed(NOW, ZoneOffset.UTC));
 
     @Test
@@ -37,6 +42,7 @@ class WebChatServiceTest {
         assertThat(message.content()).as("앞뒤 공백만 빼고 줄바꿈은 남긴다").isEqualTo("안녕\n하세요");
         assertThat(message.sentAt()).isEqualTo(NOW);
         assertThat(message.messageId()).hasSize(36);
+        verify(historyWriter).enqueue(message);
     }
 
     @Test
@@ -53,6 +59,7 @@ class WebChatServiceTest {
         assertRejected(() -> service.send(11, SENDER, " \n\t "), WebChatErrorCode.WEB_CHAT_EMPTY_MESSAGE);
         assertRejected(() -> service.send(11, SENDER, null), WebChatErrorCode.WEB_CHAT_INVALID_MESSAGE);
         assertThat(published).isEmpty();
+        verify(historyWriter, never()).enqueue(any());
     }
 
     @Test
@@ -75,6 +82,7 @@ class WebChatServiceTest {
         return new WebChatProperties("/ws/web-chat", List.of("http://localhost:5173"),
                 new WebChatProperties.RateLimit(maxMessages, Duration.ofSeconds(10)),
                 new WebChatProperties.Transport(DataSize.ofKilobytes(8), DataSize.ofKilobytes(512), Duration.ofSeconds(10)),
-                Duration.ofSeconds(10));
+                Duration.ofSeconds(10), new WebChatProperties.History(Duration.ofMillis(200), 500, 10000, 5,
+                Duration.ofSeconds(1), 50, 100));
     }
 }

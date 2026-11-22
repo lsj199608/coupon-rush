@@ -116,7 +116,8 @@ class WebChatRateLimiterTest {
         return new WebChatProperties("/ws/web-chat", List.of("http://localhost:5173"),
                 new WebChatProperties.RateLimit(maxMessages, window),
                 new WebChatProperties.Transport(DataSize.ofKilobytes(8), DataSize.ofKilobytes(512), Duration.ofSeconds(10)),
-                Duration.ofSeconds(10));
+                Duration.ofSeconds(10), new WebChatProperties.History(Duration.ofMillis(200), 500, 10000, 5,
+                Duration.ofSeconds(1), 50, 100));
     }
 
     static final class MutableClock extends Clock {

@@ -1,13 +1,21 @@
 spring:
   application:
     name: web-chat-service
-  # infra/.env 에서 REDIS_HOST, REDIS_PORT 를 읽는다 (작업 폴더 backend/web-chat-service 기준, 없으면 무시)
+  # infra/.env 에서 REDIS_*, POSTGRES_HOST/PORT, WEB_CHAT_DB_* 를 읽는다 (작업 폴더 backend/web-chat-service 기준, 없으면 무시)
   config:
     import: optional:file:../../infra/.env[.properties]
   data:
     redis:                   # 연결 티켓 확인 — coupon-api 와 같은 Redis
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+  # 대화 저장 (D6) — 같은 Postgres 서버의 자기 데이터베이스 web_chat, 전용 계정. coupon_rush(POSTGRES_DB·POSTGRES_USER)는 쓰지 않는다
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/web_chat
+    username: ${WEB_CHAT_DB_USER:web_chat}
+    password: ${WEB_CHAT_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 4          # 저장 스레드 1개 + 기록 조회. 연결을 오래 쥐는 서비스라 DB 연결은 적게
+      connection-timeout: 3000      # ms (Hikari 는 단위 문자열을 못 받음). DB 장애 때 저장·조회가 30초(기본)씩 매달리지 않게
 
 server:
   port: 8083
@@ -26,6 +34,14 @@ app:
       send-buffer-size-limit: 512KB          # 느린 클라이언트에게 쌓아 둘 수 있는 보낼 데이터 상한 — 넘으면 그 연결을 끊는다
       send-time-limit: 10s                   # 한 클라이언트에게 보내는 데 이 시간을 넘기면 끊는다
     heartbeat: 10s                           # 서버 ↔ 클라이언트 하트비트 (끊어진 연결을 찾아 정리)
+    history:                                 # 대화 저장 (D6) — 방에 먼저 보내고, 모아서 따로 저장한다
+      flush-interval: 200ms                  # 저장 스레드가 쌓인 메시지를 INSERT 하는 간격 (서버가 죽으면 최대 이만큼 잃음)
+      batch-size: 500                        # INSERT 한 번에 넣는 최대 수
+      queue-capacity: 10000                  # 저장 대기 상한 — DB 장애로 넘치면 저장만 포기하고(WARN) 대화는 계속된다
+      max-attempts: 5                        # 한 묶음 저장 시도 횟수 (넘으면 그 묶음을 버리고 ERROR 로그)
+      retry-delay: 1s                        # 재시도 간격 시작값, 시도마다 2배 (1s → 2s → 4s → 8s)
+      page-size: 50                          # 지난 대화 조회 기본 개수
+      max-page-size: 100
 
 management:
   endpoints:

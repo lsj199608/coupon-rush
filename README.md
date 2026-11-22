@@ -152,7 +152,20 @@ Claude Code에서 내 쿠폰까지 쓰려면 access token(30분)을 연결 설�
 
 ### 2-3. (선택, 개발 중) 채팅 서버: web-chat-service (8083)
 
-같은 이벤트 페이지를 보는 사람끼리 대화하는 WebSocket(STOMP) 서버입니다. Redis가 필요하고(`REDIS_HOST`·`REDIS_PORT`, coupon-api와 같은 값), 새 환경변수는 없습니다.
+같은 이벤트 페이지를 보는 사람끼리 대화하는 WebSocket(STOMP) 서버입니다. Redis(`REDIS_HOST`·`REDIS_PORT`, coupon-api와 같은 값)와
+자기 데이터베이스 `web_chat`(같은 Postgres 서버, 전용 계정 — `WEB_CHAT_DB_PASSWORD`)이 필요합니다. coupon-api의 `coupon_rush`는 쓰지 않습니다.
+
+**처음 한 번: `web_chat` 데이터베이스 만들기.** `infra/.env`에 `WEB_CHAT_DB_PASSWORD`를 넣고 `docker compose up -d`를 다시 실행합니다.
+빈 볼륨으로 처음 만드는 Postgres라면 초기화 스크립트(`infra/postgres/20-web-chat-db.sh`)가 자동으로 만들어 줍니다.
+**지금까지 쓰던 볼륨이면 초기화 스크립트가 돌지 않으므로** 같은 스크립트를 직접 한 번 실행합니다 (여러 번 실행해도 됨):
+
+```powershell
+cd infra
+docker compose up -d     # 새 환경변수·스크립트를 반영해 postgres 컨테이너를 다시 만든다 (데이터 볼륨은 그대로)
+docker exec coupon-rush-postgres sh /docker-entrypoint-initdb.d/20-web-chat-db.sh   # → "web_chat 데이터베이스·계정 준비 완료"
+```
+
+테이블은 web-chat-service가 기동할 때 자기 Flyway로 만듭니다.
 
 ```powershell
 cd backend
@@ -163,6 +176,9 @@ cd backend
 - **보내려면 로그인 연결**: coupon-api `POST /api/web-chat/tickets`(로그인)로 1회용 티켓(30초)을 받아 STOMP CONNECT의 `ticket` 헤더에 넣습니다.
   티켓 없이 연결하면 읽기만 되고, 만료·재사용된 티켓은 연결이 거절됩니다. 다시 연결할 때마다 새 티켓을 받습니다. (화면 연동은 다음 단계)
 - 보낸 사람·닉네임은 서버가 티켓으로 정하고, 회원마다 10초에 5개까지 보낼 수 있습니다. 허용한 Origin(`http://localhost:5173`)의 브라우저만 연결됩니다.
+- 보낸 메시지는 방에 먼저 전달된 뒤 모아서 저장됩니다(0.2초 간격). DB가 멈춰도 대화는 계속되고, 그동안의 메시지는 지난 대화에만 늦게 나타나거나(재시도) 빠집니다.
+- 지난 대화: `GET http://localhost:8083/api/web-chat/rooms/{이벤트 ID}/messages` (공개) → 최근 50개(오래된 것부터) + `nextBeforeId`.
+  더 이전은 `?beforeId={nextBeforeId}`, 개수는 `?size=1~100`.
 
 ### 3. 프론트엔드: Vite (5173)
 
@@ -202,6 +218,7 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 | `POSTGRES_DB` | compose, 백엔드 | DB 이름 (예: `coupon_rush`) |
 | `POSTGRES_USER` | compose, 백엔드 | DB 계정 (예: `coupon`) |
 | `POSTGRES_PASSWORD` | compose, 백엔드 | DB 비밀번호. 컨테이너를 **처음 만들 때** 적용되며, 나중에 바꾸려면 볼륨을 지우고 다시 만들어야 합니다 |
+| `WEB_CHAT_DB_PASSWORD` | compose, web-chat-service | 채팅 데이터베이스 `web_chat` 전용 계정 비밀번호 (D6). Postgres를 **처음 만들 때** 초기화 스크립트가 계정을 만들고, 기존 볼륨이면 [2-3](#2-3-선택-개발-중-채팅-서버-web-chat-service-8083)의 스크립트를 직접 실행. `POSTGRES_PASSWORD`와 다르게 |
 | `JWT_SECRET` | 백엔드 | JWT 서명 키, 32바이트 이상 랜덤 문자열.<br>생성: `[Convert]::ToBase64String((1..48 \| % { Get-Random -Max 256 }))` |
 | `KAKAO_CLIENT_ID` / `KAKAO_CLIENT_SECRET` | 백엔드 | 카카오 디벨로퍼스 > 앱 키 "REST API 키" / 보안 > Client Secret |
 | `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 백엔드 | 네이버 개발자센터 > 내 애플리케이션 |
@@ -216,6 +233,7 @@ http://localhost:5173 에 접속합니다. 프론트엔드에는 환경변수가
 |---|---|---|
 | `POSTGRES_HOST` | `localhost` | DB 호스트 |
 | `POSTGRES_PORT` | `5432` | DB 포트. compose가 여는 호스트 포트도 이 값 |
+| `WEB_CHAT_DB_USER` | `web_chat` | 채팅 데이터베이스 전용 계정 이름 (데이터베이스 이름은 `web_chat` 고정) |
 | `REDIS_HOST` | `localhost` | Redis 호스트 (coupon-api·llm-service·web-chat-service가 같은 Redis) |
 | `REDIS_PORT` | `6379` | Redis 포트. compose가 여는 호스트 포트도 이 값 |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka 브로커 주소 |
@@ -256,7 +274,8 @@ cd backend;  .\gradlew :coupon-api:benchmark   # (선택) 방식별 성능 측�
 | 증상 | 원인 / 해결 |
 |---|---|
 | bootRun이 `Could not resolve placeholder 'POSTGRES_DB'` | `infra/.env`가 없음, 또는 `:coupon-api:bootRun`이 아닌 다른 작업 폴더에서 실행함 (`.env`를 `backend/coupon-api` 기준 `../../infra/.env`로 찾음) |
-| `docker compose up`이 `POSTGRES_PASSWORD 를 설정하세요` | `infra/.env`의 필수 값이 비어 있음 |
+| `docker compose up`이 `POSTGRES_PASSWORD 를 설정하세요` (또는 `WEB_CHAT_DB_PASSWORD`) | `infra/.env`의 필수 값이 비어 있음 |
+| web-chat-service 기동이 `database "web_chat" does not exist` 또는 `password authentication failed for user "web_chat"` | 기존 볼륨이라 초기화 스크립트가 안 돎 → [2-3](#2-3-선택-개발-중-채팅-서버-web-chat-service-8083)의 `20-web-chat-db.sh` 직접 실행. 비밀번호를 나중에 바꿨다면 스크립트는 기존 계정 비밀번호를 바꾸지 않으므로 `ALTER ROLE web_chat PASSWORD '...'` |
 | DB 접속이 `password authentication failed` | 볼륨이 예전 비밀번호로 만들어짐. 로컬 데이터라면 `docker compose down -v` 후 다시 `up` |
 | 화면 API가 전부 실패, Vite 터미널에 `http proxy error ... ECONNREFUSED` | 백엔드(8080)가 떠 있지 않음 |
 | 로그인 시 "등록되지 않은 redirect_uri" | 제공자 콘솔에 `http://localhost:8080/login/oauth2/code/{provider}` 미등록 |
@@ -270,10 +289,10 @@ backend/   Gradle 멀티모듈 루트
   coupon-api/   Spring Boot (com.couponrush.{auth, user, coupon, llm, search, chatbot, global}), Flyway 마이그레이션, Lua 스크립트
   llm-service/  LLM 호출 전담 Spring Boot (Kafka 컨슈머, DB 없음)
   mcp-server/   AI 클라이언트용 MCP 도구 서버 (coupon-api 조회 API 어댑터, DB 없음)
-  web-chat-service/ 이벤트별 실시간 채팅방 (WebSocket + STOMP, DB 없음)
+  web-chat-service/ 이벤트별 실시간 채팅방 (WebSocket + STOMP, 자기 DB web_chat — 대화 저장)
   libs/llm-contract/  두 서비스가 주고받는 Kafka 메시지 계약
   libs/web-chat-contract/  coupon-api ↔ web-chat-service 채팅 연결 티켓 계약 (Redis 키·값 모양)
 frontend/  React (src/{api, hooks, components, pages, auth, utils})
-infra/     docker-compose.yml, .env.example
+infra/     docker-compose.yml, .env.example, postgres/ (초기화 스크립트: pgvector, web_chat 데이터베이스)
 docs/      동시성·Redis·Kafka 설계와 측정 기록
 ```

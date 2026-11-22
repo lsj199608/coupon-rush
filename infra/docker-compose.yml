@@ -8,11 +8,16 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?infra/.env 에 POSTGRES_DB 를 설정하세요}
       POSTGRES_USER: ${POSTGRES_USER:?infra/.env 에 POSTGRES_USER 를 설정하세요}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?infra/.env 에 POSTGRES_PASSWORD 를 설정하세요}
+      # web-chat-service 의 자기 데이터베이스 web_chat 계정 (D6) — 초기화 스크립트 20-web-chat-db.sh 가 읽는다
+      WEB_CHAT_DB_USER: ${WEB_CHAT_DB_USER:-web_chat}
+      WEB_CHAT_DB_PASSWORD: ${WEB_CHAT_DB_PASSWORD:?infra/.env 에 WEB_CHAT_DB_PASSWORD 를 설정하세요}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # 빈 볼륨으로 처음 만들 때만 이름 순서대로 실행된다 (기존 볼륨에서는 안 돎 — README 참고)
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./postgres/20-web-chat-db.sh:/docker-entrypoint-initdb.d/20-web-chat-db.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s

@@ -4,13 +4,17 @@ import com.couponrush.webchat.auth.WebChatUser;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 /**
- * 방에 메시지 보내기 — 도배 제한 → 본문 규칙 → 메시지 만들기(ID·시각·보낸 사람은 서버 값) → 발행.
+ * 방에 메시지 보내기 — 도배 제한 → 본문 규칙 → 메시지 만들기(ID·시각·보낸 사람은 서버 값) → 발행 → 저장 대기열(D6).
  * STOMP 를 모른다 (프레임·주소·세션은 컨트롤러와 입구 검사의 일) → 연결 없이 단위 테스트할 수 있다.
  * <p>
- * 이벤트가 실제로 있는지는 확인하지 않는다 (DB 없음, 메시지마다 coupon-api 를 부르면 무거움).
+ * <b>방에 먼저 보내고 저장은 나중에</b>: 저장({@link WebChatHistoryWriter})은 대기열에 넣기만 해서 DB 가 느리거나 죽어도
+ * 대화는 그대로 오간다. 저장이 실패하면 그 메시지는 지난 대화에만 없다.
+ * <p>
+ * 이벤트가 실제로 있는지는 확인하지 않는다 (메시지마다 coupon-api 를 부르면 무거움).
  * 없는 이벤트 방은 아무도 보지 않는 빈 방일 뿐이다 — 필요하면 D2 티켓 발급 때 coupon-api 가 확인하게 한다.
  */
 @Service
@@ -18,11 +22,14 @@ public class WebChatService {
 
     private final WebChatRateLimiter rateLimiter;
     private final WebChatMessagePublisher publisher;
+    private final WebChatHistoryWriter historyWriter;
     private final Clock clock;
 
-    public WebChatService(WebChatRateLimiter rateLimiter, WebChatMessagePublisher publisher, Clock clock) {
+    public WebChatService(WebChatRateLimiter rateLimiter, WebChatMessagePublisher publisher,
+                          WebChatHistoryWriter historyWriter, Clock clock) {
         this.rateLimiter = rateLimiter;
         this.publisher = publisher;
+        this.historyWriter = historyWriter;
         this.clock = clock;
     }
 
@@ -36,9 +43,11 @@ public class WebChatService {
         if (!rateLimiter.tryAcquire(sender.userId())) {
             throw new WebChatRejectedException(WebChatErrorCode.WEB_CHAT_RATE_LIMITED);
         }
+        // 시각은 마이크로초로 자른다 — PostgreSQL 정밀도. 안 자르면 실시간으로 받은 시각과 지난 대화의 시각이 달라진다
         WebChatMessage message = new WebChatMessage(UUID.randomUUID().toString(), eventId, sender.userId(),
-                sender.nickname(), normalize(content), clock.instant());
+                sender.nickname(), normalize(content), clock.instant().truncatedTo(ChronoUnit.MICROS));
         publisher.publish(message);
+        historyWriter.enqueue(message);
         return message;
     }
 

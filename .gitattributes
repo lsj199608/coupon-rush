@@ -1,0 +1,2 @@
+# 컨테이너 안에서 실행하는 셸 스크립트는 항상 LF — CRLF 로 체크아웃되면 sh 가 "set: illegal option" 으로 실패한다
+*.sh text eol=lf

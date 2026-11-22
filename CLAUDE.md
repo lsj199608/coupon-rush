@@ -169,12 +169,19 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           인증 인터페이스는 구현이 하나라 없앰(WebChatTicketAuthenticator 클래스). 새 env 없음(REDIS_HOST/PORT 재사용).
           테스트: WebChatTicketsTest(키 고정 해시·형식·JSON), WebChatTicketApiTest(7), WebChatRoomTest(18: 실제 티켓으로 연결, 재사용·없는 티켓·형식·
           동시 8연결 중 1개만·깨진 내용), ArchitectureTest(webchat 규칙 2개). 두 서비스를 함께 띄운 실제 확인은 D4(화면)에서
-    - [ ] D3) scale-out: Redis pub/sub으로 인스턴스 간 전달 — web-chat-service 2대 테스트(A 접속자 메시지가 B 접속자에게)
-    - [ ] D4) 프론트: 이벤트 상세 화면 채팅 패널(@stomp/stompjs, 자동 재연결), Vite 프록시 ws: true. 브라우저 창 2개로 수동 확인
-    - [ ] D5) (선택) 최근 메시지 50개 Redis 보관(입장 시 표시), 남은 수량 실시간 푸시(상세 3초 폴링 대체)
-    - [ ] D6) 대화 저장: web-chat-service **자기 DB** — 같은 Postgres 서버(컨테이너) 안에 데이터베이스 `web_chat` + 전용 계정,
-          web-chat-service가 자기 Flyway로 테이블 관리. coupon_rush 에는 접근하지 않음("서비스마다 자기 DB" 첫 사례). 2026-11-22 결정 — 아래 "대화 저장 계획 (D6)"
-- [ ] 8. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. D2~D4 다음에 시작. 아래 "Spring Batch 계획 (E)"
+    - [x] D6) 대화 저장 (2026-11-22, 순서 변경: D2 → **D6** → D3 → D4 — 화면(D4)에서 지난 대화까지 한 번에 만들려고) — 아래 "대화 저장 (D6)" 메모.
+          web-chat-service **자기 데이터베이스 `web_chat`**(같은 Postgres 서버, 전용 계정 web_chat, 자기 Flyway V1 web_chat_messages) — coupon_rush 에는 접속 권한도 없음
+          ("서비스마다 자기 DB" 첫 사례). 계정·DB는 초기화 스크립트 infra/postgres/20-web-chat-db.sh(기존 볼륨은 직접 1회 실행). 새 env WEB_CHAT_DB_PASSWORD(필수)·WEB_CHAT_DB_USER.
+          방에 먼저 보내고 메모리 대기열 → 전용 스레드가 0.2초마다 묶음 INSERT(ON CONFLICT message_id 무시), 실패는 1s→2s→4s→8s 재시도 후 버림 — DB가 죽어도 대화는 계속.
+          지난 대화 GET /api/web-chat/rooms/{eventId}/messages?beforeId=&size= (공개, 최근 50 기본·최대 100, id 커서, nextBeforeId).
+          테스트: WebChatHistoryWriterTest(5: 묶음·넘침·재시도 간격·순서·포기·종료 저장), WebChatHistoryTest(5: 저장 값·페이지·중복·400·DB 장애 중 보내기 계속 → 복구 후 저장),
+          WebChatRoomTest 그대로 통과. 초기화 스크립트는 임시 컨테이너로 확인(계정 생성·coupon_rush 접속 거절·재실행), 임시 DB에 bootRun → 일반 계정으로 Flyway 적용·조회 200/400
+    - [ ] D3) scale-out: Redis pub/sub으로 인스턴스 간 전달 — web-chat-service 2대 테스트(A 접속자 메시지가 B 접속자에게).
+          저장은 메시지를 받은 서버가 한 번만(받는 쪽 서버는 저장하지 않음 — 안 그러면 대수만큼 중복, message_id UNIQUE가 막긴 함)
+    - [ ] D4) 프론트: 이벤트 상세 화면 채팅 패널(@stomp/stompjs, 자동 재연결), Vite 프록시 ws: true + /api/web-chat/rooms → 8083(나머지 /api 는 8080, 더 긴 규칙을 먼저).
+          입장 = 구독 먼저 → 지난 대화 조회 → messageId로 겹침 제거, 위로 올리면 beforeId. 브라우저 창 2개로 수동 확인 (D2 티켓 흐름도 이때 함께)
+    - [ ] D5) (선택) 남은 수량 실시간 푸시(상세 3초 폴링 대체). 최근 50개 Redis 보관은 D6(DB 조회)로 대신함 — 조회가 몰려 DB가 부담되면 그때 캐시로
+- [ ] 8. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. D(채팅) 다음에 시작. 아래 "Spring Batch 계획 (E)"
 
 ## 결정 사항 / 메모
 
@@ -903,20 +910,41 @@ MCP 클라이언트 ─ POST/GET /mcp (Streamable HTTP, 세션 헤더 Mcp-Sessio
 - 보호: 메시지 크기 상한, 사용자별 도배 제한, 느린 클라이언트(전송 버퍼·시간 제한), 보낸 사람은 서버가 채움. 발급 기능과 무관(조회·대화만).
 - 챗봇(C)과 구분: 챗봇은 서버 → 브라우저 한 방향 푸시라 SSE가 더 단순하다. WebSocket은 사람끼리 양방향 대화에 쓴다.
 
-### 대화 저장 계획 (D6, 2026-11-22 결정 — 미구현)
+### 대화 저장 (7단계 D6) — web-chat-service room/(WebChatHistoryWriter·WebChatMessageRepository·WebChatHistoryService·WebChatHistoryController), 데이터베이스 web_chat
+```
+SEND → WebChatService: 도배·본문 검사 → 방에 발행 → WebChatHistoryWriter.enqueue (메모리 대기열, 기다리지 않음)
+                                  전용 스레드(web-chat-history-writer) 0.2초마다 → 최대 500개 묶음 INSERT ... ON CONFLICT (message_id) DO NOTHING
+GET /api/web-chat/rooms/{eventId}/messages?beforeId=&size= → WHERE event_id = ? [AND id < ?] ORDER BY id DESC LIMIT size+1 → 오래된 것부터 + nextBeforeId
+```
 - **원칙: 서비스마다 자기 데이터(database per service)**. 나누는 수준은 "같은 서버, 데이터베이스를 따로"
   (DB 서버를 따로 두지 않음 — 비용·로컬 환경 단순. 서버 분리는 트래픽·장애 격리가 필요할 때).
   핵심은 물리 분리가 아니라 **다른 서비스 데이터를 직접 읽지 않고 API·이벤트로만** 받는 것.
-- 구성: 같은 Postgres 컨테이너에 데이터베이스 `web_chat` + 전용 계정(web_chat DB에만 권한). web-chat-service가 자기 Flyway·자기 DataSource.
-  coupon-api의 coupon_rush 에는 접근하지 않고, coupon-api도 web_chat 에 접근하지 않는다.
-  새 env(접속 정보·비밀번호) → infra/.env.example·README 환경변수 표 갱신. 데이터베이스·계정 생성은 Postgres 초기화 스크립트(docker-entrypoint-initdb.d) —
-  **기존 볼륨에서는 초기화 스크립트가 돌지 않으므로** 수동 생성 절차도 문서화.
-- 테이블(안): web_chat_messages(id, event_id, message_id UUID UNIQUE, sender_id, sender_nickname, content, sent_at), 인덱스 (event_id, id).
-  회원 FK 없음 — users는 coupon-api 소유라 JOIN 불가 → **보낼 때의 닉네임을 복사**해 둔다(지금 메시지에 senderNickname이 있는 이유).
-- 저장 때문에 전송이 느려지지 않게: 먼저 방에 뿌리고 모아서 비동기 저장(실패 시 로그·재시도). 저장 실패가 대화를 막지 않는다.
-- 조회: 입장 시 방의 최근 N개 + 이전 페이지(id 기준 커서). D5의 Redis 최근 50개와 역할 정리 필요(둘 다 두거나 DB만).
-- 보관 기간·삭제: 채팅 내용은 개인정보 → 보관 기간(예: 이벤트 종료 후 30일) 정하고 정리 작업(Spring Batch 연습 후보), 신고·삭제는 나중.
-- 테스트: Testcontainers Postgres에 web_chat 데이터베이스, 저장·조회·비동기 저장 실패 시 대화 계속.
+- 구성: 같은 Postgres 컨테이너에 데이터베이스 `web_chat`(이름 고정) + 전용 계정(WEB_CHAT_DB_USER, 기본 web_chat, 슈퍼유저 아님, web_chat의 주인).
+  web-chat-service DataSource = jdbc:postgresql://POSTGRES_HOST:POSTGRES_PORT/web_chat, 자기 Flyway(web-chat-service/src/main/resources/db/migration, V1부터).
+  **coupon_rush 의 PUBLIC CONNECT를 거뒀다** → web_chat 계정은 접속부터 거절("User does not have CONNECT privilege"). coupon-api 계정(슈퍼유저)은 영향 없음.
+  ⚠ 8단계 coupon_batch 계정은 coupon_rush 에 `GRANT CONNECT`가 따로 필요하다.
+- 초기화: infra/postgres/20-web-chat-db.sh (docker-entrypoint-initdb.d, 빈 볼륨 첫 생성 때만 자동). psql 변수 + `\gexec`로 "없으면 만들기" → 여러 번 실행해도 됨,
+  단 이미 있는 계정의 비밀번호는 바꾸지 않는다. **기존 볼륨**: `docker compose up -d`(env·마운트 반영해 컨테이너 재생성, 볼륨 유지) 후
+  `docker exec coupon-rush-postgres sh /docker-entrypoint-initdb.d/20-web-chat-db.sh`. .sh 는 .gitattributes 로 LF 고정(CRLF면 컨테이너 sh 가 실패).
+  WEB_CHAT_DB_PASSWORD 는 compose 에서 필수(`:?`) — 없으면 `docker compose up` 자체가 멈춘다(빠뜨리면 바로 알게).
+- 테이블 web_chat_messages(id IDENTITY, message_id UUID UNIQUE, event_id, sender_id, sender_nickname VARCHAR(50), content VARCHAR(500), sent_at TIMESTAMPTZ), 인덱스 (event_id, id).
+  회원·이벤트 FK 없음 — users·coupons는 coupon-api 데이터베이스라 참조 불가 → **보낼 때의 닉네임을 복사**. VARCHAR(500)은 PostgreSQL이 글자(코드 포인트)로 세서 CONTENT_MAX와 같다.
+  JPA 없이 JdbcTemplate (묶음 INSERT·커서 조회 두 가지뿐).
+- **저장 때문에 대화가 느려지거나 멈추지 않게**: 방에 먼저 발행, 저장은 대기열에 넣기만. DB 실패 → 그 묶음을 들고 retry-delay(1s, 2배씩) 뒤 재시도, 그동안 뒤 묶음이 앞지르지 않음,
+  max-attempts(5)를 넘기면 버리고 ERROR(저장할 수 없는 묶음 하나가 영원히 막지 않게). 대기열(10,000)이 차면 저장만 포기(WARN, 1·1000건마다).
+  INSERT 는 트랜잭션 없이 → 중간 실패 후 재시도해도 ON CONFLICT로 중복 없음. 지표: savedCount / failedAttemptCount / droppedCount.
+  전용 스레드: @Scheduled 스레드(= 브로커 하트비트 스케줄러)를 쓰면 DB가 느릴 때 하트비트까지 밀린다. SmartLifecycle phase MAX-1000 = WebSocket·브로커보다 늦게 멈추며 남은 것 1회 저장.
+  Hikari connection-timeout 3000(ms 숫자 — "3s"는 바인딩 실패로 기동 실패했음), pool 4.
+- 한계: 메모리 대기열이라 서버가 갑자기 죽으면 저장 전 메시지(≤ 0.2초 + 재시도 중 묶음)를 잃는다 — 채팅은 잃어도 되는 데이터로 보고 단순함을 택함
+  (잃으면 안 되면 Kafka 같은 내구성 큐 경유). 저장 순서 id ≈ 보낸 순서(서버 1대 기준, D3 여러 대면 서버 간 몇 백 ms 엇갈릴 수 있음).
+- 시각: WebChatService가 sentAt을 **마이크로초로 자른다**(PostgreSQL 정밀도) — 실시간으로 받은 값과 지난 대화의 값이 같게.
+- 조회: 공개(방 구독과 같음), size 기본 50·최대 100, beforeId/size/이벤트 ID 오류는 400 WEB_CHAT_INVALID_REQUEST, DB 장애는 503 WEB_CHAT_HISTORY_UNAVAILABLE(대화는 계속).
+  OFFSET이 아니라 id 커서 — 새 메시지가 와도 페이지가 밀리지 않고 뒤 페이지도 인덱스로 바로. 저장이 비동기라 방금 메시지는 아직 없을 수 있음 → 화면은 구독 먼저, 기록 조회 후 messageId로 합침(D4).
+  경로 /api/web-chat/rooms/** 는 web-chat-service, /api/web-chat/tickets 는 coupon-api — 프록시가 경로로 나눈다(D4 Vite, 배포 땐 게이트웨이).
+- 아직 없음: 보관 기간·정리(채팅은 개인정보 — 예: 이벤트 종료 후 30일, Spring Batch 연습 후보), 메시지 삭제·신고, 조회 횟수 제한.
+- 테스트: @WebChatIntegrationTest(메타 애너테이션 — 설정을 같게 해 컨텍스트·컨테이너 공유, 저장 간격 50ms·재시도 200ms·page-size 3),
+  Testcontainers Postgres(pgvector 이미지, 데이터베이스 web_chat) + Redis. DB 장애는 `ALTER TABLE web_chat_messages RENAME TO web_chat_messages_broken`( 복구).
+  비동기 저장은 Awaitility로 조회 API를 기다림, 테스트마다 새 이벤트 ID(늦게 저장된 앞 테스트 메시지와 안 섞이게).
 
 ### Spring Batch 계획 (E, 2026-11-22 결정 — 미구현)
 - **기능: 종료된 이벤트 결과 집계** — 끝난 이벤트마다 발급 이력을 읽어 통계 테이블에 저장
@@ -958,7 +986,8 @@ ws /ws/web-chat (STOMP, SockJS 없음) ─▶ StompInboundGuard(입구 검사) �
 | SUBSCRIBE `/topic/events/{id}` | 누구나 (이벤트 페이지가 공개) | `WebChatMessage(messageId, eventId, senderId, senderNickname, content, sentAt)` |
 | SEND `/app/events/{id}/chat` | 로그인 연결만 | 바디 `{"content"}`만 읽음 — senderId 등 다른 필드는 무시(보낸 사람·시각·ID는 서버가 채움) |
 | SUBSCRIBE `/user/queue/errors` | 로그인 연결 | 내 메시지 거절 `{"code","message"}` (보낸 세션에만, broadcast=false) |
-- 패키지: auth/(WebChatUser = Principal, WebChatTicketAuthenticator(D2), StompInboundGuard), room/(WebChatController·WebChatService·메시지·도배 제한·발행), config/.
+- 패키지: auth/(WebChatUser = Principal, WebChatTicketAuthenticator(D2), StompInboundGuard), room/(WebChatController·WebChatService·메시지·도배 제한·발행, D6 저장·지난 대화 WebChatHistory*·WebChatMessageRepository), config/.
+  (지난 대화를 room/ 에 둔 이유: 서비스가 저장 대기열을, 저장이 메시지를 서로 써서 패키지를 나누면 순환 의존)
   계층: WebChatController = STOMP 입구(로그인 연결 확인 + 거절을 /user/queue/errors로), WebChatService = 도배 제한 → 본문 규칙(공백·500자) → 메시지 만들기 → 발행
   (STOMP를 몰라 연결 없이 단위 테스트 — WebChatServiceTest). WebChatSendRequest는 값만(검사는 서비스).
 - 보내기 주소 `/app/events/{id}/chat`의 chat은 그대로 둠 — /ws/web-chat 안에서만 쓰는 동작 이름이라 챗봇과 섞이지 않는다.
@@ -975,7 +1004,7 @@ ws /ws/web-chat (STOMP, SockJS 없음) ─▶ StompInboundGuard(입구 검사) �
   형식 오류(JSON 아님)는 컨트롤러 인자 변환에서 나서 세지 않는다. 서버 메모리라 서버마다 따로 센다 → D3(여러 대)에서 필요하면 Redis로. 1분마다 빈 기록 정리(@Scheduled).
 - 보호: Origin 허용 목록(app.web-chat.allowed-origins, 위반 403 — Origin 없는 비브라우저 클라이언트는 대상 아님), 프레임 8KB(넘으면 연결 종료),
   보낼 버퍼 512KB·10초(느린 클라이언트 끊기), 하트비트 10초(브로커 스케줄러는 messageBrokerTaskScheduler를 @Lazy로 받음).
-- 이벤트가 실제로 있는지는 확인하지 않는다(DB 없음) — 없는 이벤트 방은 빈 방일 뿐. 필요하면 D2 티켓 발급 때 coupon-api가 확인.
+- 이벤트가 실제로 있는지는 확인하지 않는다(이벤트는 coupon-api 데이터) — 없는 이벤트 방은 빈 방일 뿐. 필요하면 D2 티켓 발급 때 coupon-api가 확인.
 - 인증: D1은 전원 비로그인(헤더로 회원 ID를 받는 개발용 인증은 두지 않음 — 켜진 채 배포되면 사칭) → D2 티켓 (아래 메모).
   WebChatMessagePublisher는 D3에서 Redis pub/sub 구현으로 바꿀 경계(지금은 LocalWebChatMessagePublisher = 이 서버 브로커).
 - 테스트 WebChatRoomTest: WebSocketStompClient로 실제 연결, 회원은 실제 티켓(테스트가 Redis(Testcontainers)에 넣음)으로. 방 구독 확인은 서버 SimpMessagingTemplate로
@@ -1009,7 +1038,7 @@ ws /ws/web-chat (STOMP, SockJS 없음) ─▶ StompInboundGuard(입구 검사) �
 - llm-service 실행(선택, 문구 생성용): 컨테이너 `cd infra; docker compose --profile llm up -d --build` (로그 `docker logs -f coupon-rush-llm-service`)
   또는 호스트 `cd backend; .\gradlew :llm-service:bootRun` → 8081 (fake 제공자). 둘 중 하나만
 - MCP 서버 실행: `cd backend; .\gradlew :mcp-server:bootRun` → http://localhost:8082/mcp (coupon-api 8080이 떠 있어야 도구가 동작)
-- 채팅 서버 실행: `cd backend; .\gradlew :web-chat-service:bootRun` → ws://localhost:8083/ws/web-chat (Redis 필요. 보내기는 coupon-api 티켓으로 연결한 회원만, 화면 연동은 D4)
+- 채팅 서버 실행: `cd backend; .\gradlew :web-chat-service:bootRun` → ws://localhost:8083/ws/web-chat (Redis·Postgres의 web_chat 데이터베이스 필요 — 처음 한 번 README 2-3의 20-web-chat-db.sh. 보내기는 coupon-api 티켓으로 연결한 회원만, 화면 연동은 D4)
 - 수동 확인 절차: docs/manual-check.md (로그인·발급·관리자·AI 문구·장애 격리·예산·모바일, 기록표 포함)
 - 하루 LLM 사용량: `docker exec coupon-rush-redis redis-cli HGETALL "llm:usage:$((Get-Date).ToString('yyyyMMdd'))"`
 - 전체 테스트: `cd backend; .\gradlew test` (모든 모듈). 한 모듈만: `.\gradlew :coupon-api:test`

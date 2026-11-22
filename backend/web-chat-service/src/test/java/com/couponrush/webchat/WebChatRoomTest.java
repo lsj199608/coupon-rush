@@ -12,9 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.lang.Nullable;
 import org.springframework.messaging.converter.CompositeMessageConverter;
@@ -56,11 +54,7 @@ import static org.awaitility.Awaitility.await;
  * 구독은 비동기로 등록되므로, 보내기 전에 서버에서 그 주소로 표시용 메시지(probe)를 보내 받을 때까지 기다린다.
  * "받지 않음" 검증: 입구 검사·컨트롤러 거절은 브로커에 가기 전에 끝나므로, 거절 응답을 받은 시점에 방 메시지가 없으면 끝까지 없다.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
-        "app.web-chat.rate-limit.max-messages=3",
-        "app.web-chat.rate-limit.window=1m"
-})
-@Import(TestcontainersConfiguration.class)
+@WebChatIntegrationTest
 class WebChatRoomTest {
 
     private static final AtomicLong USER_IDS = new AtomicLong(1000);
