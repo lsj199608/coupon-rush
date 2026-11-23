@@ -176,8 +176,13 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           지난 대화 GET /api/web-chat/rooms/{eventId}/messages?beforeId=&size= (공개, 최근 50 기본·최대 100, id 커서, nextBeforeId).
           테스트: WebChatHistoryWriterTest(5: 묶음·넘침·재시도 간격·순서·포기·종료 저장), WebChatHistoryTest(5: 저장 값·페이지·중복·400·DB 장애 중 보내기 계속 → 복구 후 저장),
           WebChatRoomTest 그대로 통과. 초기화 스크립트는 임시 컨테이너로 확인(계정 생성·coupon_rush 접속 거절·재실행), 임시 DB에 bootRun → 일반 계정으로 Flyway 적용·조회 200/400
-    - [ ] D3) scale-out: Redis pub/sub으로 인스턴스 간 전달 — web-chat-service 2대 테스트(A 접속자 메시지가 B 접속자에게).
-          저장은 메시지를 받은 서버가 한 번만(받는 쪽 서버는 저장하지 않음 — 안 그러면 대수만큼 중복, message_id UNIQUE가 막긴 함)
+    - [x] D3) scale-out (2026-11-23) — 아래 "서버 간 전달 (D3)" 메모. Redis 채널 web-chat:messages 하나(모든 방), **보낸 서버도 Redis를 거쳐 받음**(모든 서버가 같은 순서),
+          리스너는 단일 스레드(컨테이너 기본 실행기는 메시지마다 새 스레드 → 순서 뒤섞임), 저장은 받은 서버만 한 번, Redis 발행 실패 = WEB_CHAT_UNAVAILABLE(저장 안 함).
+          LocalWebChatMessagePublisher → RedisWebChatMessagePublisher + WebChatRelayListener. 새 env 없음.
+          테스트: WebChatScaleOutTest(4: 같은 컨테이너로 두 번째 앱 B를 띄워 A↔B 양방향·저장 1회(B 저장 수 0)·두 서버 같은 순서·깨진 전달 메시지 버림),
+          RedisWebChatMessagePublisherTest(2), WebChatServiceTest(발행 실패 → 저장 안 함). 실제 bootRun 2대(8083·8084) 기동 → PUBSUB NUMSUB 2 확인.
+          + 도배 제한을 서버 메모리 → **Redis**로(web-chat:rate:{userId} ZSET 미끄러지는 창, Lua 하나) — 서버가 여러 대여도·다른 서버로 다시 연결해도 회원 하나로 합산.
+          테스트 WebChatRateLimiterTest(8, 실제 Redis: 서버 두 대 한 장부·동시 32스레드·키 TTL·Redis 끊김 → WEB_CHAT_UNAVAILABLE), WebChatScaleOutTest에 A·B 합산 거절 추가(5)
     - [ ] D4) 프론트: 이벤트 상세 화면 채팅 패널(@stomp/stompjs, 자동 재연결), Vite 프록시 ws: true + /api/web-chat/rooms → 8083(나머지 /api 는 8080, 더 긴 규칙을 먼저).
           입장 = 구독 먼저 → 지난 대화 조회 → messageId로 겹침 제거, 위로 올리면 beforeId. 브라우저 창 2개로 수동 확인 (D2 티켓 흐름도 이때 함께)
     - [ ] D5) (선택) 남은 수량 실시간 푸시(상세 3초 폴링 대체). 최근 50개 Redis 보관은 D6(DB 조회)로 대신함 — 조회가 몰려 DB가 부담되면 그때 캐시로
@@ -1001,12 +1006,12 @@ ws /ws/web-chat (STOMP, SockJS 없음) ─▶ StompInboundGuard(입구 검사) �
   ⚠ preservePublishOrder에서 **세션이 여러 개인 회원에게 convertAndSendToUser**(broadcast)를 하면 "Expected mutable SimpMessageHeaderAccessor"로 실패한다
   (Spring 6.2.19에서 확인). 지금은 broadcast=false만 써서 해당 없음 — 회원의 모든 탭에 보내야 하면 세션별로 보내거나 이 설정을 다시 볼 것.
 - 도배 제한(WebChatRateLimiter): 회원 기준(탭 합산), 최근 10초 5개(app.web-chat.rate-limit.*), 한도로 거절된 시도는 세지 않음, 내용 검사보다 먼저 셈(잘못된 메시지 연타도 한도 안).
-  형식 오류(JSON 아님)는 컨트롤러 인자 변환에서 나서 세지 않는다. 서버 메모리라 서버마다 따로 센다 → D3(여러 대)에서 필요하면 Redis로. 1분마다 빈 기록 정리(@Scheduled).
+  형식 오류(JSON 아님)는 컨트롤러 인자 변환에서 나서 세지 않는다. D3부터 Redis(아래 "서버 간 전달 (D3)"의 도배 제한) — D1의 메모리 장부·정리 스케줄러(@Scheduled, @EnableScheduling)는 없앰.
 - 보호: Origin 허용 목록(app.web-chat.allowed-origins, 위반 403 — Origin 없는 비브라우저 클라이언트는 대상 아님), 프레임 8KB(넘으면 연결 종료),
   보낼 버퍼 512KB·10초(느린 클라이언트 끊기), 하트비트 10초(브로커 스케줄러는 messageBrokerTaskScheduler를 @Lazy로 받음).
 - 이벤트가 실제로 있는지는 확인하지 않는다(이벤트는 coupon-api 데이터) — 없는 이벤트 방은 빈 방일 뿐. 필요하면 D2 티켓 발급 때 coupon-api가 확인.
 - 인증: D1은 전원 비로그인(헤더로 회원 ID를 받는 개발용 인증은 두지 않음 — 켜진 채 배포되면 사칭) → D2 티켓 (아래 메모).
-  WebChatMessagePublisher는 D3에서 Redis pub/sub 구현으로 바꿀 경계(지금은 LocalWebChatMessagePublisher = 이 서버 브로커).
+  WebChatMessagePublisher는 전달 방식의 경계 — D1은 이 서버 브로커로 바로, D3부터 RedisWebChatMessagePublisher(아래 "서버 간 전달 (D3)").
 - 테스트 WebChatRoomTest: WebSocketStompClient로 실제 연결, 회원은 실제 티켓(테스트가 Redis(Testcontainers)에 넣음)으로. 방 구독 확인은 서버 SimpMessagingTemplate로
   표시용 메시지(probe)를 받을 때까지, 오류 큐 구독 확인은 같은 연결로 형식 오류 하나를 보내 그 거절을 받는 것으로(순서 보장 덕분).
   "안 받음"은 거절 응답을 받은 시점에 확인(거절은 브로커 전에 끝남) — sleep은 "다른 탭에 안 감" 300ms 하나뿐. 테스트마다 새 회원 ID(도배 상태가 컨텍스트에 남음).
@@ -1031,6 +1036,34 @@ ws /ws/web-chat (STOMP, SockJS 없음) ─▶ StompInboundGuard(입구 검사) �
 - coupon-api: 회원이 없으면 404 USER_NOT_FOUND, Redis 저장 실패는 503 WEB_CHAT_TICKET_UNAVAILABLE. /api/web-chat/** 는 기본 규칙(로그인 필요)이라 SecurityConfig에 따로 없다.
   구조 규칙(ArchitectureTest): webchat → coupon·llm·search·chatbot 금지, web-chat-contract는 webchat 패키지만.
 - 한계: 티켓 발급 횟수 제한 없음(로그인 회원만, 30초 뒤 사라짐 — 남용이 보이면 회원별 분당 한도). 티켓이 이벤트(방)에 묶이지 않음(연결 하나로 여러 방 구독 가능).
+
+### 서버 간 전달 (7단계 D3) — web-chat-service room/(RedisWebChatMessagePublisher·WebChatRelayListener·WebChatRelay), config/WebChatRelayConfig
+```
+SEND (서버 A) → WebChatService: 도배·본문 → RedisWebChatMessagePublisher: PUBLISH web-chat:messages (JSON WebChatMessage) → 성공하면 저장 대기열(A만)
+Redis ─▶ 모든 서버(A 포함)의 WebChatRelayListener (단일 스레드) → 자기 단순 브로커 /topic/events/{eventId}
+```
+- **보낸 서버도 자기 브로커에 직접 넣지 않는다**: Redis가 한 채널을 모든 구독자에게 같은 순서로 주므로 어느 서버에서 보든 대화 순서가 같다.
+  직접 넣고 남에게만 보내면 서버마다 "자기 메시지가 먼저"가 되어 화면마다 순서가 다르다. 대가: 왕복 1번, Redis가 죽으면 같은 서버 안의 대화도 멈춤
+  (연결 티켓도 Redis라 이미 같은 의존).
+- **채널 하나에 모든 방**(본문의 eventId로 방을 고름). 방마다 채널 + 구독자 있는 방만 SUBSCRIBE는 서버가 안 보는 방을 받지 않지만 방별 인원 계산이 필요 —
+  서버 몇 대 규모에선 불필요, 받는 양이 문제가 되면 그때. 채널 이름은 이 서비스만 써서 계약 모듈에 두지 않음.
+- **리스너 단일 스레드**: RedisMessageListenerContainer 기본 실행기(SimpleAsyncTaskExecutor)는 메시지마다 새 스레드 → 순서가 뒤바뀔 수 있다(spring-data-redis 3.5.13 바이트코드로 확인).
+  실행기는 Bean으로 등록하지 않는다(Executor Bean이 생기면 Boot 기본 applicationTaskExecutor가 물러남). 리스너에는 브로커 넘기기만 — 저장 같은 느린 일 금지.
+- **저장은 보낸 서버만 한 번** — 받는 서버까지 저장하면 서버 수만큼 INSERT(행은 message_id UNIQUE가 막아도 쓰기는 N배). 발행 실패면 저장하지 않음(아무도 못 본 메시지가 기록에만 남지 않게).
+- 실패: 발행(Redis) 실패 → WEB_CHAT_UNAVAILABLE을 /user/queue/errors로(연결 유지, 다시 보내면 됨). 읽을 수 없는 전달 메시지(형식·필수 값 없음·다른 버전) → WARN 후 버림.
+  JSON은 Boot ObjectMapper(모르는 필드 무시) → 배포 중 필드 추가는 호환, 필드 삭제·이름 변경은 받는 쪽이 버린다.
+- 한계: pub/sub은 저장하지 않는다(at-most-once) — 구독 연결이 끊긴 동안 그 서버 접속자는 메시지를 못 받는다(컨테이너가 다시 구독, 지난 대화에는 있음 → D4 재연결 때 기록 다시 조회).
+  서버 간 순서는 Redis 기준이고 sentAt(각 서버 시계)과 몇 ms 어긋날 수 있다.
+- **도배 제한도 Redis** (서버 메모리로 세면 서버마다 장부가 따로라 ① 동시에 켜진 대수만큼 한도가 늘고 ② 다른 서버로 다시 연결하면 0부터 — active-active라서 생기는 문제):
+  `web-chat:rate:{userId}` ZSET(score = 보낸 시각 ms, member = 시도마다 UUID — 같은 ms 두 번도 따로), resources/redis/web-chat-rate-limit.lua 하나로
+  ZREMRANGEBYSCORE(창 밖 정리) → ZCARD ≥ 한도면 0(세지 않음) → ZADD + PEXPIRE(창) → 1. 창 (now - 10s, now], 키는 창 길이 뒤 사라져 정리 작업 없음.
+  시각은 앱 Clock(ARGV) — 테스트에서 고정 가능, 서버 간 NTP 차이(ms)는 10초 창에 무시할 만함. Redis TIME을 쓰면 시계 하나지만 테스트로 시간을 못 움직인다.
+  Redis 장애면 거절(WEB_CHAT_UNAVAILABLE) — 통과시켜도 이어지는 발행이 같은 Redis라 어차피 실패. 고정 창 INCR은 경계에서 두 배까지 허용돼서 기존 미끄러지는 창을 유지했다.
+  현업 메모: 메시지 한도는 앞단(게이트웨이)이 못 센다(WebSocket 안 STOMP 프레임을 해석하지 않음 — 앞단은 IP별 연결 수·연결 속도). 큰 서비스는 연결별 메모리 제한(느슨하게, Redis 앞 방어선) + 회원별 Redis 제한 두 겹 — 여기는 회원별 Redis만.
+- 테스트 WebChatScaleOutTest: A = @WebChatIntegrationTest 컨텍스트, B = SpringApplicationBuilder로 띄운 두 번째 앱(같은 컨테이너, RedisConnectionDetails·JdbcConnectionDetails에서 주소).
+  **B 설정은 명령줄 인자로** — 기본 속성(properties())은 우선순위가 낮아 infra/.env 값에 덮인다. probe는 그 서버 브로커로만 가므로 서버별 구독 확인에 쓴다.
+  B로 보낸 테스트는 저장 완료까지 기다리고 끝낸다(다음 테스트의 "B 저장 수 0" 검사가 흔들리지 않게).
+- 로컬 두 대: `.\gradlew :web-chat-service:bootRun --args="--server.port=8084"`, 확인 `docker exec coupon-rush-redis redis-cli PUBSUB NUMSUB web-chat:messages` → 2.
 
 ## 자주 쓰는 명령 (PowerShell 기준)
 - 프론트 실행: `cd frontend; npm install; npm run dev` → http://localhost:5173 (백엔드 bootRun 8080이 먼저 떠 있어야 함)

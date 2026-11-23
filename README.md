@@ -179,6 +179,9 @@ cd backend
 - 보낸 메시지는 방에 먼저 전달된 뒤 모아서 저장됩니다(0.2초 간격). DB가 멈춰도 대화는 계속되고, 그동안의 메시지는 지난 대화에만 늦게 나타나거나(재시도) 빠집니다.
 - 지난 대화: `GET http://localhost:8083/api/web-chat/rooms/{이벤트 ID}/messages` (공개) → 최근 50개(오래된 것부터) + `nextBeforeId`.
   더 이전은 `?beforeId={nextBeforeId}`, 개수는 `?size=1~100`.
+- **여러 대로 띄울 수 있습니다**: 메시지는 Redis 채널 `web-chat:messages`로 모든 서버에 전달되어, 서로 다른 서버에 붙은 사람끼리 대화하고 순서도 같게 보입니다.
+  로컬에서 두 대: 다른 창에서 `.\gradlew :web-chat-service:bootRun --args="--server.port=8084"`. Redis가 멈추면 보내기가 거절됩니다(`WEB_CHAT_UNAVAILABLE`, 연결은 유지).
+  도배 제한도 Redis에서 세므로, 탭이 서로 다른 서버에 붙어도 회원 한 명의 한도는 그대로입니다.
 
 ### 3. 프론트엔드: Vite (5173)
 

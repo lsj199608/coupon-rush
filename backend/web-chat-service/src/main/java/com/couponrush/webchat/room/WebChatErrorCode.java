@@ -27,6 +27,8 @@ public enum WebChatErrorCode {
     WEB_CHAT_EMPTY_MESSAGE("메시지를 입력해 주세요."),
     WEB_CHAT_MESSAGE_TOO_LONG("메시지는 " + WebChatMessage.CONTENT_MAX + "자까지 보낼 수 있습니다."),
     WEB_CHAT_RATE_LIMITED("메시지를 너무 빨리 보내고 있습니다. 잠시 후 다시 보내 주세요."),
+    /** Redis 장애(도배 제한 확인·서버 간 전달)로 보내지 못함 (D3) — 아무에게도 가지 않았고 저장하지 않았다. 다시 보내면 된다. */
+    WEB_CHAT_UNAVAILABLE("메시지를 보내지 못했습니다. 잠시 후 다시 보내 주세요."),
 
     // ── HTTP 응답 {"code","message"} (지난 대화 조회, D6) ──
     /** 이벤트 ID·beforeId·size 가 올바르지 않음 (400). */

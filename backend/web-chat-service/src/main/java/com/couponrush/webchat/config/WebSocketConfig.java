@@ -16,8 +16,8 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
  * STOMP over WebSocket 설정.
  * <ul>
  *   <li>SockJS 를 쓰지 않는다 — 지원 브라우저는 모두 WebSocket 을 쓸 수 있고, 대체 전송(긴 폴링)은 서버 부담·코드만 늘린다</li>
- *   <li>단순 브로커(서버 메모리): D1 은 1대 기준. 여러 대는 D3 에서 Redis pub/sub 으로 직접 잇는다
- *       (RabbitMQ 릴레이를 쓰면 scale-out 문제가 숨겨져 학습 목적에 맞지 않음)</li>
+ *   <li>단순 브로커(서버 메모리) + 서버 간은 Redis pub/sub 을 직접 잇는다 (D3, {@link WebChatRelayConfig})
+ *       — RabbitMQ 릴레이를 쓰면 scale-out 문제가 숨겨져 학습 목적에 맞지 않음</li>
  *   <li>preserveReceiveOrder / preservePublishOrder: 기본 입·출력 채널은 스레드 풀이라 같은 연결의 프레임 순서가 바뀔 수 있다
  *       → 한 사람이 보낸 메시지·한 사람에게 가는 메시지의 순서를 지킨다 (연결 단위 직렬화, 연결끼리는 병렬)</li>
  * </ul>

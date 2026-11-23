@@ -3,7 +3,6 @@ package com.couponrush.webchat;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
-import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 이벤트별 실시간 채팅방 (7단계 D). 같은 이벤트 페이지를 보는 사람끼리 대화한다.
@@ -13,11 +12,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *   SEND      /app/events/{id}/chat       보내기 (로그인만, 보낸 사람은 서버가 채움)
  *   SUBSCRIBE /user/queue/errors          내 메시지가 거절된 이유 (너무 김·도배 제한)
  * </pre>
- * 발급과 무관하다 (조회·대화만). D1 은 서버 1대 기준 — 여러 대 사이 전달은 D3(Redis pub/sub).
+ * 발급과 무관하다 (조회·대화만). 여러 대로 띄울 수 있다 — 서버 간 전달·도배 제한은 Redis (D3).
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan
-@EnableScheduling
 public class WebChatServiceApplication {
 
     public static void main(String[] args) {
