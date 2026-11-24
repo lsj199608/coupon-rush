@@ -2,9 +2,11 @@ import { useParams } from 'react-router-dom';
 import type { CouponEvent } from '../api/coupons';
 import { errorCodeOf } from '../api/errors';
 import { NotFoundPage } from './NotFoundPage';
+import { useAuth } from '../auth/AuthContext';
 import { IssuePanel } from '../components/IssuePanel';
 import { QueryState } from '../components/QueryState';
 import { StatusBadge } from '../components/StatusBadge';
+import { WebChatPanel } from '../components/WebChatPanel';
 import { useEventQuery } from '../hooks/useEvents';
 import { statusAt, useServerNow } from '../hooks/useServerClock';
 import { formatCountdown, formatDateTime } from '../utils/format';
@@ -58,6 +60,18 @@ function EventDetail({ event }: { event: CouponEvent }) {
         </p>
       )}
       <IssuePanel couponId={event.id} status={status} remainingQuantity={event.remainingQuantity} />
+      <EventWebChat eventId={event.id} />
     </>
   );
+}
+
+/**
+ * 채팅방은 로그인 상태가 정해진 뒤에 연결한다 — 세션 복원 중(loading)에 비로그인으로 붙었다가 곧바로 다시 연결하지 않게.
+ * key = 이벤트 ID: 다른 이벤트로 넘어가면 받은 메시지·연결을 새로 시작한다.
+ */
+function EventWebChat({ eventId }: { eventId: number }) {
+  const { status, user } = useAuth();
+  if (status === 'loading') return null;
+  const userId = status === 'authenticated' && user !== undefined ? user.id : null;
+  return <WebChatPanel key={eventId} eventId={eventId} userId={userId} />;
 }

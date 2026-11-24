@@ -192,6 +192,34 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 .chatbot-form button { flex: none; align-self: stretch; }
 
+/* ---------- 이벤트 채팅 (7단계 D4) ---------- */
+.web-chat { margin-top: 32px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); display: flex; flex-direction: column; }
+.web-chat-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.web-chat-head h2 { margin: 0; font-size: 16px; }
+.web-chat-status { font-size: 13px; color: var(--muted); }
+.web-chat-status-reconnecting { color: var(--error); }
+.web-chat-list { list-style: none; margin: 0; padding: 12px 14px; height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.web-chat-older { align-self: center; }
+.web-chat-older button { min-height: 32px; padding: 4px 12px; font-size: 14px; }
+.web-chat-message { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; max-width: 85%; }
+.web-chat-message.mine { align-self: flex-end; align-items: flex-end; }
+.web-chat-meta { display: flex; gap: 6px; font-size: 12px; color: var(--muted); }
+.web-chat-sender { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 12em; }
+.web-chat-meta time { font-variant-numeric: tabular-nums; }
+.web-chat-content { margin: 0; padding: 6px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); white-space: pre-line; overflow-wrap: anywhere; line-height: 1.5; }
+.web-chat-message.mine .web-chat-content { background: var(--fg); color: #fff; border-color: var(--fg); }
+.web-chat-note { margin: 0; padding: 0 14px; font-size: 14px; }
+.web-chat-list .web-chat-note { padding: 0; }
+.web-chat-login { margin: 0; padding: 12px 14px; border-top: 1px solid var(--border); font-size: 14px; }
+.web-chat-form { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
+.web-chat-form textarea {
+  flex: 1; min-width: 0; resize: none; font: inherit; font-size: 16px;   /* 16px: iOS 입력 확대 방지 */
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+}
+.web-chat-form textarea[aria-invalid='true'] { border-color: var(--error); }
+.web-chat-form button { flex: none; }
+.web-chat-count { flex-basis: 100%; font-size: 12px; text-align: right; }
+
 /* ---------- 모바일 (폭 600px 이하) ---------- */
 @media (max-width: 600px) {
   :root { --gutter: 16px; }
@@ -210,6 +238,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   .form, .copy-panel { max-width: none; }
   .candidate button { align-self: stretch; }
   .form button[type='submit'], .actions > * { flex: 1 1 auto; }
+  .web-chat { margin-left: calc(-1 * var(--gutter)); margin-right: calc(-1 * var(--gutter)); border-radius: 0; border-left: none; border-right: none; }
+  .web-chat-list { height: 50vh; }
   .chatbot-panel { inset: 0; width: auto; height: auto; border-radius: 0; border: none; }   /* 모바일은 전체 화면 */
   .issue-panel {
     /* 발급 버튼을 화면 아래에 붙여 엄지로 바로 누를 수 있게 */

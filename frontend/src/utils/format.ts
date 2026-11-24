@@ -11,6 +11,13 @@ export function formatDateTime(iso: string): string {
   return dateTime.format(new Date(iso));
 }
 
+const time = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+/** 채팅 메시지 시각 "14:05" */
+export function formatTime(iso: string): string {
+  return time.format(new Date(iso));
+}
+
 /** 남은 시간 → "1일 02:03:04" / "02:03:04" */
 export function formatCountdown(ms: number): string {
   const totalSeconds = Math.max(0, Math.ceil(ms / 1000));

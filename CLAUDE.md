@@ -183,8 +183,11 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           RedisWebChatMessagePublisherTest(2), WebChatServiceTest(발행 실패 → 저장 안 함). 실제 bootRun 2대(8083·8084) 기동 → PUBSUB NUMSUB 2 확인.
           + 도배 제한을 서버 메모리 → **Redis**로(web-chat:rate:{userId} ZSET 미끄러지는 창, Lua 하나) — 서버가 여러 대여도·다른 서버로 다시 연결해도 회원 하나로 합산.
           테스트 WebChatRateLimiterTest(8, 실제 Redis: 서버 두 대 한 장부·동시 32스레드·키 TTL·Redis 끊김 → WEB_CHAT_UNAVAILABLE), WebChatScaleOutTest에 A·B 합산 거절 추가(5)
-    - [ ] D4) 프론트: 이벤트 상세 화면 채팅 패널(@stomp/stompjs, 자동 재연결), Vite 프록시 ws: true + /api/web-chat/rooms → 8083(나머지 /api 는 8080, 더 긴 규칙을 먼저).
-          입장 = 구독 먼저 → 지난 대화 조회 → messageId로 겹침 제거, 위로 올리면 beforeId. 브라우저 창 2개로 수동 확인 (D2 티켓 흐름도 이때 함께)
+    - [x] D4) 프론트 채팅 패널 (2026-11-24, 브라우저 창 2개 수동 확인 docs/manual-check.md L1~L11 통과) — 아래 "프론트엔드"의 "이벤트 채팅" 메모.
+          이벤트 상세 아래 WebChatPanel(@stomp/stompjs 7.5.0, 지수 백오프 재연결 1s→30s, 연결마다 새 티켓), 구독 먼저 → 지난 대화(useInfiniteQuery, beforeId) → messageId로 합침,
+          다시 연결되면 지난 대화 다시 읽기, 비로그인은 읽기만 + 로그인 안내. Vite 프록시 /api/web-chat/rooms·/ws/web-chat(ws) → 8083을 /api보다 먼저(routes.test.ts가 순서 검사).
+          테스트: api/webChat.test.ts(8, stompjs 대역), components/WebChatPanel.test.tsx(12), EventPages(연결 1회). 실제 확인: 5173 프록시 경유 Node 스크립트(티켓은 Redis 직접)로
+          회원 2 + 비로그인 1 송수신·도배 거절·비로그인 보내기 ERROR·지난 대화 페이지·티켓 API 8080 라우팅 OK
     - [ ] D5) (선택) 남은 수량 실시간 푸시(상세 3초 폴링 대체). 최근 50개 Redis 보관은 D6(DB 조회)로 대신함 — 조회가 몰려 DB가 부담되면 그때 캐시로
 - [ ] 8. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. D(채팅) 다음에 시작. 아래 "Spring Batch 계획 (E)"
 
@@ -453,9 +456,9 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 
 | 폴더 | 내용 |
 |---|---|
-| api/ | axios 호출·응답 타입(coupons, admin, auth, llm, search, chatbot), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
-| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents, useEventCopy(문구 생성 상태 머신), useEventSearch(자연어 검색), useChatbot(챗봇) |
-| components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary, EventCopyPanel(AI 문구 추천), ChatbotPanel(챗봇 창) |
+| api/ | axios 호출·응답 타입(coupons, admin, auth, llm, search, chatbot, webChat(STOMP 연결 포함)), client.ts(인터셉터), tokenStore.ts, queryKeys.ts, errors.ts(에러 코드 → 메시지) |
+| hooks/ | useEvents, useIssueCoupon(발급 상태 머신), useMyCoupons, useServerClock, useAdminEvents, useEventCopy(문구 생성 상태 머신), useEventSearch(자연어 검색), useChatbot(챗봇), useWebChat(이벤트 채팅) |
+| components/ | Header, QueryState(로딩·에러·빈 상태), Spinner, StatusBadge, IssuePanel, ErrorBoundary, EventCopyPanel(AI 문구 추천), ChatbotPanel(챗봇 창), WebChatPanel(이벤트 채팅) |
 | pages/ | EventList, EventDetail, MyCoupons, AdminEventCreate, Login, OAuthCallback, NotFound |
 | auth/ | AuthContext(세션 상태), ProtectedRoute(로그인 필요), AdminRoute(ADMIN 필요) |
 | utils/ | format(날짜·카운트다운), eventForm(관리자 폼 검증·변환) |
@@ -469,7 +472,7 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 | 경로 (src/routes.ts) | 화면 | 접근 | API |
 |---|---|---|---|
 | `/` (`?q=` 검색) | 이벤트 목록 (상태 뱃지 오픈 전/진행 중/종료, 남은 수량) + 자연어 검색창 | 공개 | GET /api/coupons, POST /api/coupons/search, GET /api/coupons/search/{id} |
-| `/events/:id` | 상세: 기간·남은 수량·카운트다운·[발급 받기] | 공개 (발급만 로그인) | GET /api/coupons/{id} (3초마다), POST .../issue, GET /api/issue-requests/{id} |
+| `/events/:id` | 상세: 기간·남은 수량·카운트다운·[발급 받기] + 이벤트 채팅 | 공개 (발급·채팅 보내기만 로그인) | GET /api/coupons/{id} (3초마다), POST .../issue, GET /api/issue-requests/{id}, POST /api/web-chat/tickets, ws /ws/web-chat, GET /api/web-chat/rooms/{id}/messages |
 | `/me/coupons` | 내 쿠폰 | 로그인 | GET /api/users/me/coupons |
 | `/admin/events/new` | 이벤트 생성 폼(설명 포함) + AI 문구 추천 + Redis 재고 적재 확인 | ADMIN | POST /api/admin/coupons, GET .../reconciliation, POST /api/admin/llm/event-copy, GET /api/admin/llm/requests/{id} |
 | `/login` | 카카오·네이버·구글 버튼 | 공개 | (페이지 이동) /oauth2/authorization/{provider} |
@@ -568,6 +571,33 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
   실패 사유·다시 보내기(retryable만), 접수 거절 메시지, 새 대화, 닫기/Esc, linkify가 HTML을 글자로 둠.
 - 테스트 메모: EventPages "중복 클릭" 테스트의 `expect(button).toBeDisabled()`가 클릭 직후 동기 검사라 App이 useAuth를 읽게 되자 깨졌다 —
   버튼 모양은 다음 렌더에서 바뀌므로 waitFor로, 중복 요청 방지는 requestIssue 1회 호출로 검증한다.
+
+#### 이벤트 채팅 (7단계 D4, components/WebChatPanel + hooks/useWebChat + api/webChat)
+```
+상세 화면 (로그인 확인이 끝난 뒤 — loading 중엔 그리지 않음, key = 이벤트 ID)
+  connectWebChat(eventId, 로그인?) ─ beforeConnect: 로그인이면 POST /api/web-chat/tickets → CONNECT ticket 헤더 (실패하면 읽기만으로 연결)
+    onConnect → SUBSCRIBE /topic/events/{id} (+ 로그인 연결이면 /user/queue/errors) → 연결 횟수 +1
+  연결 1회차 → 지난 대화 useInfiniteQuery ['web-chat','history',id] (첫 페이지 = 최신 50, [이전 대화 보기] = beforeId)
+  2회차 이상(다시 연결) → 지난 대화 refetch (pub/sub 은 끊긴 동안 메시지를 남기지 않지만 DB 에는 있다)
+  화면 = 지난 대화(오래된 페이지부터) + 실시간 메시지, messageId 로 한 번만 (mergeMessages)
+```
+- **STOMP 연결은 api/webChat.ts 안에만**(connectWebChat → {send, close}) — 훅·화면은 stompjs를 모르고, 테스트는 이 함수 하나만 대역으로 바꾼다.
+  test/setup.ts가 모든 테스트에서 connectWebChat·fetchWebChatHistory를 vi.fn으로 막는다(상세 화면이 실제 WebSocket을 열지 않게). 연결 코드 테스트는 vi.unmock + stompjs 대역.
+- 티켓은 **연결할 때마다 새로**(beforeConnect — 1회용·30초). beforeConnect 안 예외는 stompjs가 연결·재연결을 멈추므로 전부 안에서 잡는다.
+  티켓 거절(만료)은 서버 ERROR + 연결 종료 → 자동 재연결이 새 티켓으로. 로그인 상태가 바뀌면(userId) 연결을 새로 맺는다.
+- 재연결: 지수 백오프 1초 → 30초(서버 재시작 때 모든 탭이 동시에 두드리지 않게), 하트비트 10초(서버와 같게).
+- 지난 대화 조회는 apiClient가 아니라 맨 axios — 공개 API라 JWT를 채팅 서버에 보내지 않는다(채팅 서버는 JWT를 모르는 서비스).
+  staleTime Infinity·창 포커스 재조회 끔(다시 읽는 때 = 다시 연결됐을 때), gcTime 0(다른 이벤트에 갔다 오면 새로).
+- 실시간 메시지는 소켓에서만 오므로 state(최근 500개). 서버 데이터 규칙(Query로만)의 예외 — 지난 대화는 Query.
+- 보내기: 앞뒤 공백 제거, 글자 수는 코드 포인트(서버와 같은 기준, textarea maxLength는 UTF-16이라 안 씀), 450자부터 글자 수 표시, 500 넘으면 버튼 꺼짐.
+  내 메시지는 따로 그리지 않고 방 구독으로 돌아온 것을 그린다(서버가 정한 순서·시각 그대로). 거절은 /user/queue/errors → webChatRejectionMessage, 다음 보내기 때 지움.
+- 스크롤: 맨 아래(48px 안)를 보고 있을 때만 새 메시지를 따라 내려감, 내가 보내면 항상 맨 아래, [이전 대화 보기]는 붙이기 전 "맨 아래까지 거리"를 지켜 보던 위치 유지(useLayoutEffect).
+  "위로 올리면 자동 로드" 대신 버튼 — 단순하고 테스트 가능(jsdom에 IntersectionObserver 없음).
+- 본문은 글자로만(React 텍스트 노드, white-space: pre-line). 내 메시지 판단 = senderId === 로그인 회원 ID.
+- **Vite 프록시 순서**: 적은 순서대로 처음 맞는 규칙(vite 6 for...in) → /api/web-chat/rooms·/ws/web-chat(ws: true)을 /api보다 먼저. changeOrigin 끔 —
+  채팅 서버가 Origin(5173)을 허용 목록과 비교하고, 프록시는 브라우저 Origin을 그대로 넘긴다. /api/web-chat/tickets 는 8080 그대로.
+- 한계: 끊긴 동안 50개가 넘게 오가면 다시 읽은 최신 페이지와 그 전 사이가 빌 수 있다(위로 [이전 대화 보기]를 누르면 채워짐). 구독 SUBSCRIBE가 서버에 등록되기 전
+  수 ms 사이의 메시지는 놓칠 수 있다(RECEIPT로 기다리면 없앨 수 있으나 단순 브로커가 SUBSCRIBE 영수증을 보장하지 않아 보류).
 
 #### 발급 폴링 구조 (hooks/useIssueCoupon)
 ```
@@ -1071,7 +1101,7 @@ Redis ─▶ 모든 서버(A 포함)의 WebChatRelayListener (단일 스레드) 
 - llm-service 실행(선택, 문구 생성용): 컨테이너 `cd infra; docker compose --profile llm up -d --build` (로그 `docker logs -f coupon-rush-llm-service`)
   또는 호스트 `cd backend; .\gradlew :llm-service:bootRun` → 8081 (fake 제공자). 둘 중 하나만
 - MCP 서버 실행: `cd backend; .\gradlew :mcp-server:bootRun` → http://localhost:8082/mcp (coupon-api 8080이 떠 있어야 도구가 동작)
-- 채팅 서버 실행: `cd backend; .\gradlew :web-chat-service:bootRun` → ws://localhost:8083/ws/web-chat (Redis·Postgres의 web_chat 데이터베이스 필요 — 처음 한 번 README 2-3의 20-web-chat-db.sh. 보내기는 coupon-api 티켓으로 연결한 회원만, 화면 연동은 D4)
+- 채팅 서버 실행: `cd backend; .\gradlew :web-chat-service:bootRun` → ws://localhost:8083/ws/web-chat (Redis·Postgres의 web_chat 데이터베이스 필요 — 처음 한 번 README 2-3의 20-web-chat-db.sh. 보내기는 coupon-api 티켓으로 연결한 회원만, 화면은 이벤트 상세의 채팅 — Vite 프록시 경유)
 - 수동 확인 절차: docs/manual-check.md (로그인·발급·관리자·AI 문구·장애 격리·예산·모바일, 기록표 포함)
 - 하루 LLM 사용량: `docker exec coupon-rush-redis redis-cli HGETALL "llm:usage:$((Get-Date).ToString('yyyyMMdd'))"`
 - 전체 테스트: `cd backend; .\gradlew test` (모든 모듈). 한 모듈만: `.\gradlew :coupon-api:test`

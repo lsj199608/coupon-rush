@@ -25,4 +25,15 @@ describe('Vite 프록시 규칙과 화면 경로', () => {
     expect(intercepted('/oauth2/authorization/kakao')).toEqual(['/oauth2']);
     expect(intercepted('/login/oauth2/code/kakao')).toEqual(['/login/oauth2']);
   });
+
+  // Vite 는 적은 순서대로 보고 처음 맞는 규칙을 쓴다 (vite 6 proxyMiddleware 의 for...in)
+  const proxy = viteConfig.server?.proxy as Record<string, { target: string; ws?: boolean }>;
+  const firstRule = (path: string) => proxy[proxyPrefixes.find((prefix) => path.startsWith(prefix))!];
+
+  it('채팅: 지난 대화·WebSocket 은 채팅 서버(8083), 연결 티켓·나머지 /api 는 coupon-api(8080)', () => {
+    expect(firstRule('/api/web-chat/rooms/1/messages?beforeId=3').target).toBe('http://localhost:8083');
+    expect(firstRule('/ws/web-chat')).toEqual({ target: 'http://localhost:8083', ws: true });
+    expect(firstRule('/api/web-chat/tickets').target).toBe('http://localhost:8080');
+    expect(firstRule('/api/coupons').target).toBe('http://localhost:8080');
+  });
 });

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as authApi from '../api/auth';
 import * as couponsApi from '../api/coupons';
+import * as webChatApi from '../api/webChat';
 import type { CouponEvent, IssueRequestResult } from '../api/coupons';
 import { tokenStore } from '../api/tokenStore';
 import { ISSUE_POLLING } from '../hooks/useIssueCoupon';
@@ -108,6 +109,14 @@ describe('이벤트 상세와 발급', () => {
   afterEach(() => {
     ISSUE_POLLING.intervalMs = 1_000;
     ISSUE_POLLING.timeoutMs = 30_000;
+  });
+
+  it('채팅방은 로그인 확인이 끝난 뒤 그 회원으로 한 번만 연결한다 (비로그인으로 붙었다 다시 붙지 않게)', async () => {
+    vi.mocked(couponsApi.fetchEvent).mockResolvedValue(event());
+    renderApp('/events/1');
+    expect(await screen.findByRole('region', { name: '이벤트 채팅' })).toBeInTheDocument();
+    expect(webChatApi.connectWebChat).toHaveBeenCalledTimes(1);
+    expect(webChatApi.connectWebChat).toHaveBeenCalledWith(1, true, expect.anything());
   });
 
   it('설명이 있으면 이름 아래에 보여 준다', async () => {

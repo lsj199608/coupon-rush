@@ -38,7 +38,22 @@ const MESSAGES: Record<string, string> = {
   CHATBOT_DAILY_LIMIT_EXCEEDED: '오늘 질문 횟수(50번)를 모두 썼어요. 내일 다시 이용해 주세요.',
   CHATBOT_BUDGET_EXCEEDED: '오늘 AI 사용량을 모두 써서 지금은 답할 수 없어요. 내일 다시 이용해 주세요.',
   CHATBOT_UNAVAILABLE: '질문을 보내지 못했어요. 잠시 후 다시 보내 주세요.',
+  // 이벤트 채팅방 — 내 메시지 거절(/user/queue/errors, 백엔드 web-chat-service WebChatErrorCode)과 지난 대화 조회
+  WEB_CHAT_INVALID_MESSAGE: '메시지를 보내지 못했어요. 다시 보내 주세요.',
+  WEB_CHAT_EMPTY_MESSAGE: '메시지를 입력해 주세요.',
+  WEB_CHAT_MESSAGE_TOO_LONG: '메시지는 500자까지 보낼 수 있어요.',
+  WEB_CHAT_RATE_LIMITED: '메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 보내 주세요.',
+  WEB_CHAT_UNAVAILABLE: '메시지를 보내지 못했어요. 잠시 후 다시 보내 주세요.',
+  WEB_CHAT_INVALID_REQUEST: '요청 값이 올바르지 않아요.',
+  WEB_CHAT_HISTORY_UNAVAILABLE: '지난 대화를 불러오지 못했어요. 지금 대화는 계속할 수 있어요.',
+  // 채팅 연결 티켓 (coupon-api)
+  WEB_CHAT_TICKET_UNAVAILABLE: '채팅 로그인 확인에 실패했어요. 잠시 후 다시 시도해 주세요.',
 };
+
+/** 채팅 거절 코드(연결 유지) → 메시지. 모르는 코드면 보내지 못했다는 일반 안내 */
+export function webChatRejectionMessage(code: string): string {
+  return MESSAGES[code] ?? MESSAGES.WEB_CHAT_UNAVAILABLE;
+}
 
 /** 키워드 검색으로 대신한 이유(FALLBACK.fallbackReason, 백엔드 SearchFallbackReason) → 안내 */
 const SEARCH_FALLBACK_MESSAGES: Record<string, string> = {

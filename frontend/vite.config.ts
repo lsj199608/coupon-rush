@@ -3,6 +3,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const BACKEND = 'http://localhost:8080';
+/** 채팅 서버 web-chat-service (7단계 D) */
+const WEB_CHAT = 'http://localhost:8083';
 
 /**
  * 개발 서버(5173)가 /api, /oauth2, /login 요청을 백엔드(8080)로 넘긴다.
@@ -17,6 +19,12 @@ const BACKEND = 'http://localhost:8080';
  *   이렇게 해야 각 콘솔에 등록해 둔 8080 콜백 주소와 일치한다. (5173 으로 만들면 "등록되지 않은 redirect_uri" 오류)
  *   카카오 등은 로그인 후 브라우저를 8080 콜백으로 보내고, 백엔드가 refresh 쿠키를 심은 뒤 5173/oauth/callback 으로 돌려보낸다.
  *   쿠키는 포트를 구분하지 않으므로(localhost) 이후 5173 → /api/auth/refresh 요청에도 실린다.
+ *
+ * 채팅(7단계 D4)은 두 서비스에 나뉜다 — 연결 티켓 /api/web-chat/tickets 는 coupon-api(8080), 지난 대화 /api/web-chat/rooms 와
+ *   WebSocket /ws/web-chat 은 web-chat-service(8083).
+ *   ⚠ Vite 는 규칙을 **적은 순서대로** 보고 처음 맞는 것을 쓴다 → 더 긴 /api/web-chat/rooms 를 /api 보다 먼저 둔다 (routes.test.ts 가 검사).
+ *   /ws/web-chat 은 ws: true (WebSocket 업그레이드도 넘김). changeOrigin 은 끈다 — 채팅 서버가 Origin(5173)을 허용 목록과 비교하는데,
+ *   프록시는 Origin 을 그대로 넘기므로 브라우저가 보낸 값이 검사된다.
  */
 export default defineConfig({
   plugins: [react()],
@@ -24,6 +32,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
+      '/api/web-chat/rooms': { target: WEB_CHAT },
+      '/ws/web-chat': { target: WEB_CHAT, ws: true },
       '/api': { target: BACKEND },
       '/oauth2': { target: BACKEND, changeOrigin: true },
       '/login/oauth2': { target: BACKEND, changeOrigin: true },

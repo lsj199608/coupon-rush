@@ -15,4 +15,5 @@ export const queryKeys = {
   llmRequest: (requestId: string) => ['admin', 'llm-requests', requestId] as const,
   chatbotSessions: ['chatbot', 'sessions'] as const,
   chatbotSession: (sessionId: number) => ['chatbot', 'sessions', sessionId] as const,
+  webChatHistory: (eventId: number) => ['web-chat', 'history', eventId] as const,
 };
