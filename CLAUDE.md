@@ -38,7 +38,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 6. React 화면 연동
 7. LLM 기능 (이벤트 문구 생성 → 자연어 검색 → 챗봇) + WebSocket 채팅방(D)
 8. AWS + Kubernetes 배포 (2026-11-24 순서 변경: Spring Batch보다 먼저)
-9. Spring Batch (종료된 이벤트 결과 집계) — 마지막
+9. Spring Batch (종료된 이벤트 결과 집계)
+10. Postgres만 AWS RDS로 옮기기 (2026-11-24 결정, Spring Batch 다음 — 마지막)
 
 ## 진행 상황
 작업 단계가 끝날 때마다 이 섹션을 갱신하고 함께 커밋한다. (여러 PC에서 이어서 작업하기 위함)
@@ -195,9 +196,12 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - [ ] 8. AWS + Kubernetes 배포 — 2026-11-24 결정: Spring Batch보다 먼저. **방식 미정**, 후보:
       EKS(클러스터만 시간당 $0.10 ≈ 월 $73, 노드·ALB·NAT 포함 24시간이면 약 $150~200 → 공부할 때만 켜고 지우기) /
       EC2 + k3s(같은 kubectl·매니페스트, 약 $40~70) / 로컬 Kubernetes(Docker Desktop, $0)로 매니페스트를 먼저 다듬기.
-      정할 것: 데이터 저장소(클러스터 안 vs 관리형 RDS·ElastiCache·MSK), 도메인·HTTPS. 같은 도메인 + 리버스 프록시 구조 유지(CORS 없음),
+      데이터 저장소(2026-11-24 결정): Postgres·Redis·Kafka 모두 **클러스터 안**(StatefulSet + PersistentVolume) — 비용이 거의 안 늘고
+      로컬 Kubernetes 매니페스트를 그대로 쓴다. 관리형은 10단계에서 Postgres만 RDS로(MSK는 비용 때문에 안 함). 정할 것: 도메인·HTTPS. 같은 도메인 + 리버스 프록시 구조 유지(CORS 없음),
       상세 조회 1초 캐시(D5 대신), /internal/** 은 밖으로 내보내지 않음. AWS 예산 알림을 먼저 걸 것
-- [ ] 9. Spring Batch (마지막) — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. 아래 "Spring Batch 계획 (E)"
+- [ ] 9. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. 아래 "Spring Batch 계획 (E)"
+- [ ] 10. Postgres → AWS RDS (마지막, 2026-11-24 결정) — 배포·배치가 끝난 뒤. 실무에서 가장 흔한 조합(앱은 Kubernetes, 운영 DB는 관리형)을
+      직접 옮겨 보며 차이(백업·접속 설정·비용)를 비교. web_chat 데이터베이스·계정(D6)과 coupon_batch 계정·batch 스키마(9단계)도 함께 옮겨야 한다
 
 ## 결정 사항 / 메모
 
