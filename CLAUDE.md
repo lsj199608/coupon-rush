@@ -11,7 +11,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - Message Queue: Kafka
 - Auth: Spring Security OAuth2 Client (카카오/네이버/구글) + JWT
 - Frontend: React + Vite + TypeScript, TanStack Query
-- Infra: Docker Compose (로컬), 추후 AWS EC2 배포
+- Infra: Docker Compose (로컬), 8단계에서 AWS + Kubernetes 배포 (방식 미정 — 아래 진행 상황 8)
 - LLM: Anthropic 공식 Java SDK (com.anthropic:anthropic-java, llm-service에만). 처음엔 Spring AI 예정이었으나 7단계에서 변경 —
   구조화된 출력·거절(stop_reason=refusal)·사용 토큰·상태코드별 예외를 SDK가 그대로 제공해 재시도·서킷·예산 판정이 정확해서
 
@@ -37,7 +37,8 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 5. Kafka 비동기 처리
 6. React 화면 연동
 7. LLM 기능 (이벤트 문구 생성 → 자연어 검색 → 챗봇) + WebSocket 채팅방(D)
-8. Spring Batch (종료된 이벤트 결과 집계)
+8. AWS + Kubernetes 배포 (2026-11-24 순서 변경: Spring Batch보다 먼저)
+9. Spring Batch (종료된 이벤트 결과 집계) — 마지막
 
 ## 진행 상황
 작업 단계가 끝날 때마다 이 섹션을 갱신하고 함께 커밋한다. (여러 PC에서 이어서 작업하기 위함)
@@ -188,8 +189,15 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           다시 연결되면 지난 대화 다시 읽기, 비로그인은 읽기만 + 로그인 안내. Vite 프록시 /api/web-chat/rooms·/ws/web-chat(ws) → 8083을 /api보다 먼저(routes.test.ts가 순서 검사).
           테스트: api/webChat.test.ts(8, stompjs 대역), components/WebChatPanel.test.tsx(12), EventPages(연결 1회). 실제 확인: 5173 프록시 경유 Node 스크립트(티켓은 Redis 직접)로
           회원 2 + 비로그인 1 송수신·도배 거절·비로그인 보내기 ERROR·지난 대화 페이지·티켓 API 8080 라우팅 OK
-    - [ ] D5) (선택) 남은 수량 실시간 푸시(상세 3초 폴링 대체). 최근 50개 Redis 보관은 D6(DB 조회)로 대신함 — 조회가 몰려 DB가 부담되면 그때 캐시로
-- [ ] 8. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. D(채팅) 다음에 시작. 아래 "Spring Batch 계획 (E)"
+    - [-] D5) **건너뜀 (2026-11-24 결정)** — 남은 수량 실시간 푸시(상세 3초 폴링 대체). 실무에서 흔한 방식은 폴링 + 짧은 캐시라서,
+          8단계 배포 때 리버스 프록시(Nginx) 1초 캐시(proxy_cache_lock)로 대신한다 — 1만 명이 보고 있어도 coupon-api 조회는 이벤트당 초당 약 1번.
+          최근 50개 Redis 보관은 D6(DB 조회)로 대신함 — 조회가 몰려 DB가 부담되면 그때 캐시로
+- [ ] 8. AWS + Kubernetes 배포 — 2026-11-24 결정: Spring Batch보다 먼저. **방식 미정**, 후보:
+      EKS(클러스터만 시간당 $0.10 ≈ 월 $73, 노드·ALB·NAT 포함 24시간이면 약 $150~200 → 공부할 때만 켜고 지우기) /
+      EC2 + k3s(같은 kubectl·매니페스트, 약 $40~70) / 로컬 Kubernetes(Docker Desktop, $0)로 매니페스트를 먼저 다듬기.
+      정할 것: 데이터 저장소(클러스터 안 vs 관리형 RDS·ElastiCache·MSK), 도메인·HTTPS. 같은 도메인 + 리버스 프록시 구조 유지(CORS 없음),
+      상세 조회 1초 캐시(D5 대신), /internal/** 은 밖으로 내보내지 않음. AWS 예산 알림을 먼저 걸 것
+- [ ] 9. Spring Batch (마지막) — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. 아래 "Spring Batch 계획 (E)"
 
 ## 결정 사항 / 메모
 
@@ -957,7 +965,7 @@ GET /api/web-chat/rooms/{eventId}/messages?beforeId=&size= → WHERE event_id = 
 - 구성: 같은 Postgres 컨테이너에 데이터베이스 `web_chat`(이름 고정) + 전용 계정(WEB_CHAT_DB_USER, 기본 web_chat, 슈퍼유저 아님, web_chat의 주인).
   web-chat-service DataSource = jdbc:postgresql://POSTGRES_HOST:POSTGRES_PORT/web_chat, 자기 Flyway(web-chat-service/src/main/resources/db/migration, V1부터).
   **coupon_rush 의 PUBLIC CONNECT를 거뒀다** → web_chat 계정은 접속부터 거절("User does not have CONNECT privilege"). coupon-api 계정(슈퍼유저)은 영향 없음.
-  ⚠ 8단계 coupon_batch 계정은 coupon_rush 에 `GRANT CONNECT`가 따로 필요하다.
+  ⚠ 9단계(Spring Batch) coupon_batch 계정은 coupon_rush 에 `GRANT CONNECT`가 따로 필요하다.
 - 초기화: infra/postgres/20-web-chat-db.sh (docker-entrypoint-initdb.d, 빈 볼륨 첫 생성 때만 자동). psql 변수 + `\gexec`로 "없으면 만들기" → 여러 번 실행해도 됨,
   단 이미 있는 계정의 비밀번호는 바꾸지 않는다. **기존 볼륨**: `docker compose up -d`(env·마운트 반영해 컨테이너 재생성, 볼륨 유지) 후
   `docker exec coupon-rush-postgres sh /docker-entrypoint-initdb.d/20-web-chat-db.sh`. .sh 는 .gitattributes 로 LF 고정(CRLF면 컨테이너 sh 가 실패).
