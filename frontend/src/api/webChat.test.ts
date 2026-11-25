@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 vi.unmock('./webChat');   // test/setup.ts 가 화면 테스트용으로 막아 둔 것을 풀고 실제 연결 코드를 검사한다
 
@@ -42,8 +42,14 @@ vi.mock('./client', () => ({ apiClient: { post: vi.fn() } }));
 import { apiClient } from './client';
 import { connectWebChat, contentLength, type WebChatHandlers } from './webChat';
 
-function handlers(): WebChatHandlers & Record<keyof WebChatHandlers, ReturnType<typeof vi.fn>> {
-  return { onConnected: vi.fn(), onDisconnected: vi.fn(), onMessage: vi.fn(), onRejected: vi.fn() };
+/** 핸들러마다 제 함수 타입의 목 (vitest 4 의 타입 없는 vi.fn() 은 함수 타입에 넣을 수 없다) */
+function handlers(): { [K in keyof WebChatHandlers]: Mock<WebChatHandlers[K]> } {
+  return {
+    onConnected: vi.fn<WebChatHandlers['onConnected']>(),
+    onDisconnected: vi.fn<WebChatHandlers['onDisconnected']>(),
+    onMessage: vi.fn<WebChatHandlers['onMessage']>(),
+    onRejected: vi.fn<WebChatHandlers['onRejected']>(),
+  };
 }
 
 /** 클라이언트가 연결 시도 → 티켓 받기 → 서버가 CONNECTED 를 준 상황 */

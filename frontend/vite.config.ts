@@ -42,6 +42,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    // vitest 4부터 restoreMocks 는 vi.spyOn 만 되돌린다 → vi.fn 의 호출 기록·구현도 테스트마다 되돌리려면 mockReset 이 함께 필요 (v3 의 restoreMocks 와 같은 동작)
     restoreMocks: true,
+    mockReset: true,
   },
 });

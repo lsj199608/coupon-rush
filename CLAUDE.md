@@ -193,6 +193,10 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
     - [-] D5) **건너뜀 (2026-11-24 결정)** — 남은 수량 실시간 푸시(상세 3초 폴링 대체). 실무에서 흔한 방식은 폴링 + 짧은 캐시라서,
           8단계 배포 때 리버스 프록시(Nginx) 1초 캐시(proxy_cache_lock)로 대신한다 — 1만 명이 보고 있어도 coupon-api 조회는 이벤트당 초당 약 1번.
           최근 50개 Redis 보관은 D6(DB 조회)로 대신함 — 조회가 몰려 DB가 부담되면 그때 캐시로
+- [x] 보안 업데이트 (2026-11-25): 프론트 npm audit 7건 → 0건 — axios 1.21.1, react-router-dom 7.18.7, vite 6.4.6, vitest 4.1.12 (아래 프론트 "테스트 메모")
+- [ ] **⚠ 다음 작업(8단계) 시작 전에 Claude가 먼저 말할 것 — 2026-11-25 사용자 요청**: 아직 안 한 보안 검사 3가지
+      ① 백엔드 Gradle 의존성 (OWASP Dependency-Check 등) ② Docker 이미지 postgres·redis·kafka (Trivy / docker scout) ③ Node.js 실행 프로그램 (이 PC v26.13.0, 공식 보안 공지와 비교).
+      끝나면 이 항목을 [x]로 바꾸고 결과를 적는다
 - [ ] 8. AWS + Kubernetes 배포 — 2026-11-24 결정: Spring Batch보다 먼저. **방식 미정**, 후보:
       EKS(클러스터만 시간당 $0.10 ≈ 월 $73, 노드·ALB·NAT 포함 24시간이면 약 $150~200 → 공부할 때만 켜고 지우기) /
       EC2 + k3s(같은 kubectl·매니페스트, 약 $40~70) / 로컬 Kubernetes(Docker Desktop, $0)로 매니페스트를 먼저 다듬기.
@@ -646,6 +650,8 @@ frontend/ — Vite 6 + React 19 + TypeScript, react-router-dom 7, @tanstack/reac
 
 #### 테스트 메모
 - Vitest + Testing Library + jsdom. client.test.ts는 axios-mock-adapter로 인터셉터 검증.
+- vitest 4 (2026-11-25, 3 → 4): restoreMocks가 vi.spyOn만 되돌려서 vite.config.ts에 mockReset: true를 함께 둔다(빼면 vi.fn 호출 기록이 다음 테스트로 넘어가 23개 실패).
+  타입 없는 vi.fn()은 함수 타입 자리에 못 넣는다 → vi.fn<타입>() (api/webChat.test.ts).
   AuthFlow / EventPages / AdminPages / AppShell(에러 바운더리·404)은 api 모듈을 vi.mock으로 대체 (test/renderApp.tsx: Provider 구성 + apiError 헬퍼).
 - routes.test.ts는 node 환경(esbuild가 jsdom에서 안 돎).
 - hooks/useIssueCoupon.test.tsx는 가짜 시계로 실제 값(1초 간격·30초 타임아웃) 검증. 가짜 시계에서는 TanStack Query의 notifyManager
