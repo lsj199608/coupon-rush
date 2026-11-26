@@ -194,9 +194,14 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
           8단계 배포 때 리버스 프록시(Nginx) 1초 캐시(proxy_cache_lock)로 대신한다 — 1만 명이 보고 있어도 coupon-api 조회는 이벤트당 초당 약 1번.
           최근 50개 Redis 보관은 D6(DB 조회)로 대신함 — 조회가 몰려 DB가 부담되면 그때 캐시로
 - [x] 보안 업데이트 (2026-11-25): 프론트 npm audit 7건 → 0건 — axios 1.21.1, react-router-dom 7.18.7, vite 6.4.6, vitest 4.1.12 (아래 프론트 "테스트 메모")
-- [ ] **⚠ 다음 작업(8단계) 시작 전에 Claude가 먼저 말할 것 — 2026-11-25 사용자 요청**: 아직 안 한 보안 검사 3가지
-      ① 백엔드 Gradle 의존성 (OWASP Dependency-Check 등) ② Docker 이미지 postgres·redis·kafka (Trivy / docker scout) ③ Node.js 실행 프로그램 (이 PC v26.13.0, 공식 보안 공지와 비교).
-      끝나면 이 항목을 [x]로 바꾸고 결과를 적는다
+- [x] 보안 검사 (2026-11-26, docker scout — `docker scout cves fs://<bootJar>` / `docker scout quickview <이미지>`, Critical·High 기준)
+      ① Gradle: Boot 3.5.16이 3.5.x 마지막 공개판이라 루트 build.gradle에서 버전만 덮어씀 — tomcat 10.1.55 → 10.1.62, jackson 2.21.4 → 2.21.9,
+         netty 4.1.135 → 4.1.141, postgresql 42.7.11 → 42.7.15, (kafka-clients 경유) snappy-java 1.1.10.12·lz4-java 1.11.4 제약.
+         **Boot를 올리면 이 덮어쓰기를 지울 것.** 남은 것: spring-webmvc 6.2.19 CVE-2026-47884(XsltView)·47890(SSE 조각 렌더링) — 둘 다 안 써서 영향 없음,
+         공개 수정판은 Spring 7.0.9+(Boot 4)뿐
+      ② 이미지: redis 7.4-alpine(1C/6H, alpine zlib·openssl) → **8.12-alpine**(0C/4H). kafka 3.9.1(9C/85H, 오래된 JRE 기본 이미지)은 **3.9.x 유지 결정**
+         (4.4.0은 2C/15H — 메이저 업그레이드라 보류, 8단계 이후 재검토). pgvector pg17(4C/30H) Critical은 전부 gosu(시작 때만 쓰는 Go 바이너리)의 Go stdlib — 새 이미지 없음, 관찰
+      ③ Node.js: 이 PC v26.13.0 → 2026-11-10 보안 릴리스 v26.13.1 있음 → 사용자가 직접 업데이트
 - [ ] 8. AWS + Kubernetes 배포 — 2026-11-24 결정: Spring Batch보다 먼저. **방식 미정**, 후보:
       EKS(클러스터만 시간당 $0.10 ≈ 월 $73, 노드·ALB·NAT 포함 24시간이면 약 $150~200 → 공부할 때만 켜고 지우기) /
       EC2 + k3s(같은 kubectl·매니페스트, 약 $40~70) / 로컬 Kubernetes(Docker Desktop, $0)로 매니페스트를 먼저 다듬기.
@@ -228,7 +233,7 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
 - **이름 규칙 (2026-11-21)**: AI 챗봇 = **chatbot**(패키지 chatbot, 클래스 Chatbot*, API /api/chatbot/**, 테이블 chatbot_*, 코드 CHATBOT_*),
   사람끼리 WebSocket 채팅 = **webChat**(모듈 web-chat-service, 패키지 webchat, 클래스 WebChat*, 코드 WEB_CHAT_*, 설정 app.web-chat, 연결 /ws/web-chat).
   그냥 "chat"은 쓰지 않는다 (둘이 섞여서 D2 티켓 API가 챗봇 경로 /api/chat/** 와 겹칠 뻔함). 이전 이름 chat_* 테이블은 V9로, 계약은 SCHEMA_VERSION 2로 바꿈.
-- 이미지: pgvector/pgvector:pg17, redis:7.4-alpine, apache/kafka:3.9.1 (KRaft 단일 노드)
+- 이미지: pgvector/pgvector:pg17, redis:8.12-alpine(2026-11-26 7.4 → 8.12, 보안 검사), apache/kafka:3.9.1 (KRaft 단일 노드)
 - Kafka 리스너 2개: PLAINTEXT://localhost:9092(호스트에서 실행하는 앱·도구용, 기존) + INTERNAL://kafka:29092(compose 네트워크 안 컨테이너용).
   컨테이너가 localhost:9092로 붙으면 자기 자신을 가리킨다. 호스트에는 29092를 열지 않는다.
 - Kafka 데이터 위치는 KAFKA_LOG_DIRS=/var/lib/kafka/data (볼륨). 이미지 기본값 /tmp/kraft-combined-logs라서 7단계 전까지는 볼륨이 쓰이지 않아

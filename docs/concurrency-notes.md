@@ -337,7 +337,7 @@ DB 저장 실패 시 재고 원복, Set 유실 후 중복 발급 시 처리, 재
 ### 규모별 비교 — 1,000명 / 10,000명 / 중복 요청 (`CouponIssueScaleBenchmarkTest`)
 
 재고 100 / 32스레드. 1,000명은 3회 평균(워밍업 1회 제외), 나머지는 1회 측정.
-Redis는 Testcontainers 컨테이너(`redis:7.4-alpine`)를 쓴다.
+Redis는 Testcontainers 컨테이너(`redis:8.12-alpine`)를 쓴다.
 
 **모든 실행에서 검증한 것**
 - 초과 발급 0건: `coupon_issues` 행 = 재고(100)

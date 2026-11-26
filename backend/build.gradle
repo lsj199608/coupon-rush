@@ -20,6 +20,23 @@ subprojects {
 		mavenCentral()
 	}
 
+	// 보안 패치 (2026-11-26, docker scout): Boot 3.5.16 이 3.5.x 마지막 공개판이라 Boot 대신 라이브러리 버전만 올린다.
+	// Boot 를 올리면(4.x 로 가거나 3.5 새 패치가 나오면) 이 덮어쓰기를 지우고 Boot 관리 버전으로 되돌릴 것.
+	// spring-webmvc 6.2.19 의 CVE-2026-47884(XsltView) / CVE-2026-47890(SSE 조각 렌더링)은 해당 기능을 쓰지 않아 영향 없음 —
+	// 공개 수정판은 7.0.9+ 뿐 (6.2.20 은 유료 지원 전용).
+	ext['tomcat.version'] = '10.1.62'        // 10.1.55: Critical 5 (권한·인증 우회 등)
+	ext['jackson-bom.version'] = '2.21.9'    // 2.21.4: High 5 (자원 고갈)
+	ext['netty.version'] = '4.1.141.Final'   // 4.1.135: Critical 1 + High 1 (Redis 클라이언트 Lettuce 경유)
+	ext['postgresql.version'] = '42.7.15'    // 42.7.11: High 1
+
+	dependencies {
+		constraints {
+			// kafka-clients 가 끌고 오는 압축 라이브러리 (Boot 관리 대상 아님)
+			implementation('org.xerial.snappy:snappy-java:1.1.10.12') { because 'CVE-2026-108106, CVE-2026-93451 (<= 1.1.10.8)' }
+			implementation('at.yawk.lz4:lz4-java:1.11.4') { because 'CVE-2026-106451 (<= 1.11.3)' }
+		}
+	}
+
 	tasks.withType(JavaCompile).configureEach {
 		options.encoding = 'UTF-8'
 	}

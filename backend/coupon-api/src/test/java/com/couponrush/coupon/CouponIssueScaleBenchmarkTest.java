@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 규모별 비교: 재고 100 고정, 요청 1,000명 / 10,000명, 그리고 "같은 사람이 여러 번 동시에 요청"하는 부하.
  * 매 실행마다 초과 발급 0건, 중복 발급 0건을 DB(와 Redis)에서 직접 검증한다.
- * Redis 는 Testcontainers 컨테이너(redis:7.4-alpine)를 쓴다 (TestcontainersConfiguration).
+ * Redis 는 Testcontainers 컨테이너(redis:8.12-alpine)를 쓴다 (TestcontainersConfiguration).
  *
  * 시간이 오래 걸려 기본 test 에서는 제외: ./gradlew benchmark → build/benchmark/coupon-issue-scale.md
  */

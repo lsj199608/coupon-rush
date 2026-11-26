@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class WebChatRateLimiterTest {
 
     @Container
-    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine"))
+    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:8.12-alpine"))
             .withExposedPorts(6379);
 
     private static LettuceConnectionFactory connectionFactory;
