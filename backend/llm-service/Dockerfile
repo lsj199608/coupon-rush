@@ -8,9 +8,13 @@ WORKDIR /workspace
 # 의존성 계층을 소스와 분리 — 빌드 설정이 그대로면 소스만 바뀌어도 의존성을 다시 받지 않는다
 COPY gradlew settings.gradle build.gradle ./
 COPY gradle ./gradle
+# settings.gradle 이 모든 모듈을 include 하므로 모듈 build.gradle 은 전부 넣는다 (8단계에서 네 서비스 Dockerfile 모양을 맞춤)
 COPY coupon-api/build.gradle coupon-api/build.gradle
 COPY llm-service/build.gradle llm-service/build.gradle
+COPY mcp-server/build.gradle mcp-server/build.gradle
+COPY web-chat-service/build.gradle web-chat-service/build.gradle
 COPY libs/llm-contract/build.gradle libs/llm-contract/build.gradle
+COPY libs/web-chat-contract/build.gradle libs/web-chat-contract/build.gradle
 RUN chmod +x gradlew && ./gradlew :llm-service:dependencies --no-daemon -q > /dev/null
 
 COPY libs/llm-contract/src libs/llm-contract/src

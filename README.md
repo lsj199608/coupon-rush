@@ -274,6 +274,19 @@ cd frontend; npm run build         # 타입 검사 + 프로덕션 빌드
 cd backend;  .\gradlew :coupon-api:benchmark   # (선택) 방식별 성능 측정, 약 12분 → coupon-api/build/benchmark/*.md
 ```
 
+## 서비스 이미지 빌드 (8단계 Kubernetes용)
+
+저장소 루트에서 실행합니다. 백엔드는 빌드 컨텍스트가 `backend/`(멀티모듈 루트)이고, 이미지 안에서 Gradle로 bootJar만 만듭니다(테스트는 위 명령으로 따로).
+
+```powershell
+foreach ($m in 'coupon-api','llm-service','mcp-server','web-chat-service') {
+  docker build -f "backend/$m/Dockerfile" -t "coupon-rush/${m}:local" backend
+}
+docker build -t coupon-rush/frontend:local frontend   # npm run build 결과를 담은 Nginx (8080, 비root)
+```
+
+모든 이미지는 root가 아닌 사용자로 실행됩니다(백엔드 uid 10001, 프론트 nginx uid 101). Docker Desktop Kubernetes(kubeadm 방식)는 로컬 이미지를 그대로 씁니다(저장소에 push 불필요).
+
 ## 문제 해결
 
 | 증상 | 원인 / 해결 |
@@ -297,7 +310,7 @@ backend/   Gradle 멀티모듈 루트
   web-chat-service/ 이벤트별 실시간 채팅방 (WebSocket + STOMP, 자기 DB web_chat — 대화 저장)
   libs/llm-contract/  두 서비스가 주고받는 Kafka 메시지 계약
   libs/web-chat-contract/  coupon-api ↔ web-chat-service 채팅 연결 티켓 계약 (Redis 키·값 모양)
-frontend/  React (src/{api, hooks, components, pages, auth, utils})
+frontend/  React (src/{api, hooks, components, pages, auth, utils}), Dockerfile + nginx/ (이미지용 Nginx 설정)
 infra/     docker-compose.yml, .env.example, postgres/ (초기화 스크립트: pgvector, web_chat 데이터베이스)
 docs/      동시성·Redis·Kafka 설계와 측정 기록
 ```

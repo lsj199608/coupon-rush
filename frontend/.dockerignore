@@ -1,0 +1,6 @@
+# 프론트 이미지 빌드 컨텍스트에서 뺄 것 — node_modules 는 이미지 안에서 npm ci 로 새로 받는다(Windows 용 바이너리가 섞이지 않게)
+node_modules
+dist
+coverage
+*.log
+.vite

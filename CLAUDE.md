@@ -213,6 +213,23 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
       그때 참고: EKS 무료 등급은 없음(클러스터 $0.10/시간). 신규 계정 크레딧 최대 $200(가입 $100 + 서비스 사용 $100)으로 EKS·EC2·ELB·RDS·ElastiCache 사용 가능,
       MSK는 유료 플랜만. 무료 플랜 계정은 6개월 또는 크레딧 소진 시 닫힘(그 전에 유료 플랜 전환), 예전에 AWS 계정이 있었으면 대상 아님.
       필요할 때만 켜면 월 $20~30 → 크레딧으로 약 6개월(2026-11-24 확인, 올릴 때 요금·조건 다시 확인)
+      **로컬 Kubernetes 계획 (2026-11-26)**: 매니페스트 = 평범한 YAML + Kustomize(infra/k8s/base + overlays/local, 나중에 overlays/aws, Helm 안 씀),
+      이미지 저장소 없음(로컬 이미지, imagePullPolicy IfNotPresent), 입구 = 직접 만든 Nginx(프론트 정적 + 리버스 프록시, Vite 프록시 규칙 이전,
+      /internal/** 차단, 상세 1초 캐시) — ingress-nginx는 2026-03 은퇴 발표라 안 씀, Gateway API는 AWS 때 비교. Secret은 `kubectl create secret --from-env-file`(git에 안 올림).
+      미리 짚은 문제: OAuth 콘솔에 http://localhost/login/oauth2/code/{제공자} 추가 등록(사용자) + forward-headers-strategy / mcp-server 0.0.0.0 + NetworkPolicy
+      (컨테이너 llm-service → mcp-server 제한도 풀림) / 2대면 스케줄러 중복 → ShedLock / 비로그인 검색 한도 IP → 신뢰 프록시 X-Forwarded-For
+  - [x] 8-0) 준비 (2026-11-26): `C:\Users\LSJ\.wslconfig`(memory=10GB, processors=8, swap=4GB — PC 15.5GB, 기본값은 절반 7.5GB) → Docker Desktop Kubernetes
+        **kubeadm** 방식(노드 docker-desktop, v1.36.1, StorageClass hostpath 기본). ⚠ 처음 켰을 때 kind 방식이었는데 kind는 노드가 숨겨진 컨테이너라
+        로컬 이미지를 못 봄(ErrImageNeverPull) → kubeadm으로 바꿈, busybox 로컬 태그 + imagePullPolicy Never로 동작 확인.
+        hostpath는 RECLAIMPOLICY Delete — PVC를 지우면 데이터도 지워짐(8-2 주의). Kubernetes는 공부할 때만 켜기(켜 두면 메모리 1~2GB 상시)
+  - [x] 8-1) 이미지 (2026-11-26) — 아래 "서비스 이미지 (8-1)" 메모. coupon-api·mcp-server·web-chat-service Dockerfile(llm-service와 같은 모양) + frontend/Dockerfile(Nginx).
+        확인: 5개 빌드, 백엔드 4개를 compose 네트워크(coupon-rush_default)에 붙여 기동 → actuator UP·Docker healthy·사용자 app,
+        프론트 /healthz·SPA 경로(/events/3 → index.html)·assets 1년 캐시·index.html no-cache·nginx 사용자·버전 숨김
+  - [ ] 8-2) 데이터 저장소 StatefulSet + PV (Postgres·Redis·Kafka, web_chat 초기화 ConfigMap, Secret)
+  - [ ] 8-3) 앱 Deployment + Service (ConfigMap/Secret, readiness/liveness, 요청/상한)
+  - [ ] 8-4) 입구 Nginx 게이트웨이 (localhost, OAuth 콜백, /internal 차단, 1초 캐시)
+  - [ ] 8-5) 여러 대 (coupon-api·web-chat-service 2대, ShedLock, rolling update + graceful shutdown)
+  - [ ] 8-6) 수동 확인 (docs/manual-check.md 절차를 클러스터에서)
 - [ ] 9. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. 아래 "Spring Batch 계획 (E)"
 - [ ] 10. Postgres → AWS RDS (마지막, 2026-11-24 결정) — 배포·배치가 끝난 뒤. 실무에서 가장 흔한 조합(앱은 Kubernetes, 운영 DB는 관리형)을
       직접 옮겨 보며 차이(백업·접속 설정·비용)를 비교. web_chat 데이터베이스·계정(D6)과 coupon_batch 계정·batch 스키마(9단계)도 함께 옮겨야 한다
@@ -243,6 +260,15 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   포트를 열지 않는다. 호스트 bootRun과 동시에 켜지 않는다(같은 컨슈머 그룹).
   **계약(llm-contract)이나 llm-service 코드가 바뀌면 `--build`로 다시 빌드한다** — 2026-11-14 11-09 빌드 이미지가 EVENT_SEARCH를 몰라
   역직렬화 실패 → DLT → 결과 없음 → 검색이 매번 FALLBACK/TIMEOUT이 됐다 (로그: "not one of the values accepted for Enum class").
+- **서비스 이미지 (8-1)**: 이름 `coupon-rush/{coupon-api|llm-service|mcp-server|web-chat-service|frontend}:local`, 빌드 명령은 README "서비스 이미지 빌드".
+  백엔드 Dockerfile은 backend/{모듈}/Dockerfile, 컨텍스트 backend/, 네 개가 같은 모양: JDK에서 bootJar만(테스트 없음) → eclipse-temurin:21-jre-jammy + curl, uid 10001 app.
+  settings.gradle이 모든 모듈을 include하므로 **모듈 build.gradle은 전부 COPY**(의존성 계층), 소스는 자기·의존 모듈만. 새 모듈을 추가하면 네 Dockerfile에 build.gradle COPY 한 줄씩.
+  backend/.dockerignore는 build·.gradle·src/test 제외(예전엔 coupon-api/src도 뺐음).
+  JRE 기본 이미지는 jammy 유지 — 2026-11-26 비교 jammy 0C/0H, noble 0C/0H, alpine 1C/2H.
+  프론트: node:26-alpine에서 npm ci + npm run build → **nginx:alpine을 직접 비root로**(user 지시어 삭제, pid /tmp, /var/cache/nginx chown, 8080) —
+  nginxinc/nginx-unprivileged:alpine은 9C/31H로 훨씬 많았다. nginx 단계에서 `apk upgrade`(zlib 1.4 수정판 — Critical 1 제거).
+  이미지 스캔 결과(2026-11-26): 백엔드 4개는 spring-webmvc 2C(영향 없음, 위 보안 검사)만, 프론트는 High 2(libxml2·musl, 수정판 없음). 설정 frontend/nginx/default.conf(/healthz, /assets/ 1년 immutable, index.html no-cache, SPA try_files, server_tokens off).
+  Docker HEALTHCHECK는 compose용이고 Kubernetes는 매니페스트 probe를 쓴다. mcp-server는 이미지 안에서도 127.0.0.1에만 열림 → 8-3에서 바꿈.
 - 접속 정보/비밀값은 infra/.env 하나로 관리. docker-compose와 Spring(application.yml의
   spring.config.import: optional:file:../../infra/.env[.properties], 작업 폴더 backend/coupon-api 기준)이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
 - 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.
