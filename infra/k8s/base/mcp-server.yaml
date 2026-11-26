@@ -1,0 +1,94 @@
+# mcp-server (8-3) — 챗봇(llm-service)이 쓰는 조회 도구. 클러스터 안 주소 http://mcp-server:8082/mcp
+#
+# bootRun 에서는 루프백(127.0.0.1)에만 열었다 — 공개 도구(검색·상세)는 인증 없이 쓰므로 PC 밖에서 못 오게.
+# 클러스터에서는 다른 Pod(llm-service)가 와야 하므로 0.0.0.0 으로 열고, 대신 아래 NetworkPolicy 로 llm-service 만 들어오게 막는다.
+# 밖(게이트웨이 8-4)으로도 내보내지 않는다. 사람이 Claude Code 로 쓸 때는 kubectl port-forward (NetworkPolicy 와 무관하게 Pod 로 바로 연결).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server
+spec:
+  selector:
+    app.kubernetes.io/name: mcp-server
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcp-server
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: mcp-server
+          image: coupon-rush/mcp-server:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: mcp-server-config }
+            - secretRef: { name: mcp-server }
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: -XX:MaxRAMPercentage=75
+          ports:
+            - name: http
+              containerPort: 8082
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# llm-service Pod 만 mcp-server 8082 로 들어올 수 있다 (같은 네임스페이스의 다른 Pod·게이트웨이 모두 차단).
+# 규칙을 실제로 지키는지는 CNI(네트워크 플러그인)에 달렸다 — 지키지 않는 CNI 에서는 규칙이 있어도 다 통과한다 (8-3 확인 결과는 CLAUDE.md)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-server-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-server
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: llm-service
+      ports:
+        - protocol: TCP
+          port: 8082

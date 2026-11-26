@@ -1,0 +1,75 @@
+# coupon-api (8-3) — 발급·로그인·조회·관리자·LLM 요청 접수. 클러스터 안 주소 coupon-api:8080
+# 설정: ConfigMap coupon-api-config (kustomization.yaml generator) + Secret coupon-api (local-setup.ps1: DB·JWT·OAuth·INTERNAL_API_TOKEN)
+apiVersion: v1
+kind: Service
+metadata:
+  name: coupon-api
+spec:
+  selector:
+    app.kubernetes.io/name: coupon-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coupon-api
+spec:
+  replicas: 1   # 2대는 8-5 (스케줄러 중복 실행 ShedLock 과 함께)
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coupon-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coupon-api
+    spec:
+      # Service 이름(redis, postgres, kafka …)마다 주입되는 REDIS_PORT=tcp://… 가 앱 설정 REDIS_PORT 와 겹친다 → 끈다
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: coupon-api
+          image: coupon-rush/coupon-api:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: coupon-api-config }
+            - secretRef: { name: coupon-api }
+          env:
+            # JVM 힙 = 컨테이너 메모리 상한의 75% (나머지는 스레드 스택·메타스페이스·직접 메모리)
+            - name: JAVA_TOOL_OPTIONS
+              value: -XX:MaxRAMPercentage=75
+          ports:
+            - name: http
+              containerPort: 8080
+          # 기동(Flyway·Kafka 연결 포함 15~30초)을 기다리는 동안 liveness 가 재시작시키지 않게
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: tmp           # 루트 파일 시스템은 읽기 전용, Tomcat 작업 폴더 등 임시 파일만 여기에
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

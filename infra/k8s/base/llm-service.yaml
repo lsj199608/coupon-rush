@@ -1,0 +1,59 @@
+# llm-service (8-3) — Kafka 로 요청을 받아 LLM(기본 fake) 호출, 챗봇은 mcp-server 도구 사용. 공개 API 없음 → Service 도 없다
+# 설정: ConfigMap llm-service-config + Secret llm-service (local-setup.ps1: MCP_SERVICE_TOKEN, LLM_API_KEY — JWT·OAuth·DB 값은 받지 않음)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llm-service
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: llm-service
+          image: coupon-rush/llm-service:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: llm-service-config }
+            - secretRef: { name: llm-service }
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: -XX:MaxRAMPercentage=75
+          ports:
+            - name: http          # 헬스체크(actuator)만
+              containerPort: 8081
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 200m, memory: 384Mi }
+            limits: { memory: 768Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

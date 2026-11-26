@@ -228,7 +228,10 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - [x] 8-2) 데이터 저장소 (2026-11-26) — 아래 "로컬 Kubernetes 매니페스트 (8-2)" 메모. Postgres·Redis·Kafka StatefulSet + PVC, local-setup.ps1(Secret·ConfigMap).
         확인: 초기화(pgvector·web_chat DB·web_chat 계정은 coupon_rush 접속 거절), Redis AOF, Kafka 토픽 생성·메시지,
         Pod 3개 삭제 후 재생성·`kubectl delete -k` 후 재적용 모두 데이터 유지(PVC 남음)
-  - [ ] 8-3) 앱 Deployment + Service (ConfigMap/Secret, readiness/liveness, 요청/상한)
+  - [x] 8-3) 앱 4개 Deployment (2026-11-26) — 아래 "로컬 Kubernetes 앱 (8-3)" 메모. 확인(클러스터 안 curl Pod + 시험 회원 2명·직접 서명한 JWT, 끝나고 삭제):
+        공개 목록·지난 대화 200, 자연어 검색 AI 조건 COMPLETED 1초, 관리자 생성 → Redis 재고 적재, 발급 202 → COMPLETED 1초, 챗봇 "내 쿠폰" COMPLETED 1초
+        (llm-service → mcp-server → coupon-api 내부 API, 링크 http://localhost/events/{id}), 채팅 티켓 200, 일반 회원 → 관리자 403·토큰 없음 401,
+        coupon-api Pod 삭제 → 8초 뒤 새 Pod Ready(그동안 다른 앱 정상). **NetworkPolicy는 Docker Desktop에서 지켜지지 않음**(아래 메모)
   - [ ] 8-4) 입구 Nginx 게이트웨이 (localhost, OAuth 콜백, /internal 차단, 1초 캐시)
   - [ ] 8-5) 여러 대 (coupon-api·web-chat-service 2대, ShedLock, rolling update + graceful shutdown)
   - [ ] 8-6) 수동 확인 (docs/manual-check.md 절차를 클러스터에서)
@@ -286,6 +289,23 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - Redis: compose와 달리 **AOF 켬**(appendonly yes, everysec) — Pod 재시작 때 마지막 RDB 스냅숏 뒤 재고 차감이 사라지면 Redis ↔ DB 불일치.
   - Kafka: KAFKA_LOG_DIRS 볼륨, 힙 256m~512m(상한 1Gi), fsGroup 1000, probe는 tcpSocket(api-versions 스크립트는 JVM을 띄워 무거움).
   - 요청/상한: postgres 256Mi/768Mi, redis 64Mi/256Mi, kafka 768Mi/1Gi. compose 스택과 동시에 켜도 포트는 안 겹침(클러스터 Service는 밖에 안 열림), 메모리만 더 씀.
+- **로컬 Kubernetes 앱 (8-3)**: base/{coupon-api, llm-service, mcp-server, web-chat-service}.yaml — Deployment(1대, 2대는 8-5) + Service(이름:포트 = coupon-api:8080,
+  mcp-server:8082, web-chat-service:8083. llm-service는 받는 요청이 없어 Service 없음).
+  - **application.yml은 그대로, 클러스터 값은 환경변수로 덮어쓴다**(relaxed binding): base/kustomization.yaml의 configMapGenerator `{앱}-config` —
+    DB·Redis·Kafka 주소, mcp-server SERVER_ADDRESS=0.0.0.0·APP_MCP_ALLOWEDHOSTS(mcp-server:8082 추가)·APP_MCP_COUPONAPI_BASEURL·APP_MCP_FRONTENDBASEURL,
+    APP_WEBCHAT_ALLOWEDORIGINS, FRONTEND_OAUTH2_REDIRECT_URI, LLM_PROVIDER=fake. 브라우저 주소는 8-4 게이트웨이 http://localhost 기준.
+    generator라 이름에 해시가 붙어 **값을 바꿔 apply하면 Pod가 자동으로 다시 뜬다**. 클러스터 설정의 기준은 이 YAML(.env의 COUPON_ISSUE_MODE 같은 선택 값은 안 넘어감).
+  - 비밀값은 local-setup.ps1이 앱마다 Secret `{앱}`(앱 이름과 같음)로 — coupon-api: DB·JWT·OAuth 6개·INTERNAL_API_TOKEN / llm-service: MCP_SERVICE_TOKEN·LLM_API_KEY /
+    mcp-server: MCP_SERVICE_TOKEN·INTERNAL_API_TOKEN / web-chat-service: WEB_CHAT_DB_*. 선택 키가 비면 경고만.
+  - probe: Spring health 그룹 /actuator/health/liveness·readiness(MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED=true), startup probe 2초×60(기동 대기 중 liveness가 죽이지 않게).
+    JVM 힙 = JAVA_TOOL_OPTIONS -XX:MaxRAMPercentage=75. 요청/상한: coupon-api 512Mi/1Gi, llm·web-chat 384Mi/768Mi, mcp 256Mi/512Mi. 노드 요청 합계 메모리 약 2.9GB(10GB 중 29%).
+  - 보안: runAsNonRoot(10001), readOnlyRootFilesystem + /tmp emptyDir, capabilities drop ALL, allowPrivilegeEscalation false, seccomp RuntimeDefault. enableServiceLinks false.
+  - **이미지를 같은 :local 태그로 다시 빌드하면 Pod는 자동으로 안 바뀐다** → `kubectl rollout restart deploy/{앱} -n coupon-rush`.
+  - **NetworkPolicy mcp-server-ingress(llm-service만 8082)는 Docker Desktop에서 동작하지 않는다** — kubeadm 방식에 정책을 지키는 CNI가 없음(kube-system에 kube-proxy뿐,
+    다른 Pod에서 mcp-server 200 확인). 규칙은 남겨 둔다: k3s는 기본 지킴(kube-router), EKS는 VPC CNI network policy를 켜면 지킴 → AWS 때 다시 확인. 로컬에서 실제 차단이 필요하면 Calico 설치.
+  - 클러스터 DB는 compose DB와 별개(빈 DB에서 Flyway V1~). 로그인은 8-4 입구 전까지 불가 → 확인은 시험 회원 + Secret의 JWT_SECRET으로 직접 서명한 access token
+    (jjwt는 키 길이로 HS256/384/512, claims sub·token_type=access·jti·role·exp). 사람 MCP 클라이언트는 `kubectl port-forward -n coupon-rush svc/mcp-server 8082:8082`.
+  - PowerShell 5.1로 kubectl exec -i 에 한글을 파이프하면 `$OutputEncoding`(기본 ASCII) 때문에 ?로 깨진다 → `$OutputEncoding = New-Object Text.UTF8Encoding($false)`.
 - 접속 정보/비밀값은 infra/.env 하나로 관리. docker-compose와 Spring(application.yml의
   spring.config.import: optional:file:../../infra/.env[.properties], 작업 폴더 backend/coupon-api 기준)이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
 - 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.

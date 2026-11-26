@@ -1,4 +1,5 @@
-﻿# 로컬 Kubernetes 준비 (8단계): 네임스페이스 + Secret + ConfigMap 을 만든다(이미 있으면 갱신). 여러 번 실행해도 된다.
+﻿# 로컬 Kubernetes 준비 (8단계): 네임스페이스 + Secret(postgres, 앱 4개) + ConfigMap postgres-init 을 만든다(이미 있으면 갱신). 여러 번 실행해도 된다.
+# Secret 값을 바꾼 뒤에는 앱이 다시 읽도록 `kubectl rollout restart deploy -n coupon-rush` (Secret 은 기동 때만 환경변수로 들어감)
 #   powershell -ExecutionPolicy Bypass -File infra/k8s/local-setup.ps1
 #   그다음 kubectl apply -k infra/k8s/overlays/local
 #
@@ -32,6 +33,13 @@ function Get-Required([string] $key) {
     $values[$key]
 }
 
+# 없어도 앱이 뜨는 값 (비면 그 기능만 꺼짐 — README 환경변수 표). 비어 있으면 경고만
+function Get-Optional([string] $key, [string] $whenEmpty) {
+    if ($values.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace($values[$key])) { return $values[$key] }
+    if ($whenEmpty) { Write-Warning "infra/.env 에 $key 가 없습니다 — $whenEmpty" }
+    ''
+}
+
 # 고른 키만으로 Secret 을 만든다. 값은 명령줄 인자가 아니라 임시 파일로 넘긴다(프로세스 목록에 비밀값이 보이지 않게)
 function Set-Secret([string] $name, [hashtable] $data) {
     $tmp = [IO.Path]::GetTempFileName()
@@ -61,7 +69,37 @@ Set-Secret 'postgres' @{
     WEB_CHAT_DB_PASSWORD = Get-Required 'WEB_CHAT_DB_PASSWORD'
 }
 
-# 3. ConfigMap postgres-init — infra/postgres/ 의 init.sql, 20-web-chat-db.sh 그대로 (빈 볼륨 첫 기동 때만 실행됨)
+# 3. 앱 Secret (8-3) — 앱마다 그 앱이 읽는 비밀값만. 비밀이 아닌 설정은 base/kustomization.yaml 의 configMapGenerator
+$internalToken = Get-Optional 'INTERNAL_API_TOKEN' '챗봇의 "내 쿠폰" 조회(내부 API)가 꺼집니다'
+$mcpToken      = Get-Optional 'MCP_SERVICE_TOKEN' '챗봇이 mcp-server 도구를 못 씁니다'
+
+Set-Secret 'coupon-api' @{
+    POSTGRES_DB          = Get-Required 'POSTGRES_DB'
+    POSTGRES_USER        = Get-Required 'POSTGRES_USER'
+    POSTGRES_PASSWORD    = Get-Required 'POSTGRES_PASSWORD'
+    JWT_SECRET           = Get-Required 'JWT_SECRET'
+    KAKAO_CLIENT_ID      = Get-Required 'KAKAO_CLIENT_ID'
+    KAKAO_CLIENT_SECRET  = Get-Required 'KAKAO_CLIENT_SECRET'
+    NAVER_CLIENT_ID      = Get-Required 'NAVER_CLIENT_ID'
+    NAVER_CLIENT_SECRET  = Get-Required 'NAVER_CLIENT_SECRET'
+    GOOGLE_CLIENT_ID     = Get-Required 'GOOGLE_CLIENT_ID'
+    GOOGLE_CLIENT_SECRET = Get-Required 'GOOGLE_CLIENT_SECRET'
+    INTERNAL_API_TOKEN   = $internalToken
+}
+Set-Secret 'llm-service' @{
+    MCP_SERVICE_TOKEN = $mcpToken
+    LLM_API_KEY       = Get-Optional 'LLM_API_KEY' ''   # 없으면 fake 제공자 (기본)
+}
+Set-Secret 'mcp-server' @{
+    MCP_SERVICE_TOKEN  = $mcpToken
+    INTERNAL_API_TOKEN = $internalToken
+}
+Set-Secret 'web-chat-service' @{
+    WEB_CHAT_DB_USER     = $(if ($values['WEB_CHAT_DB_USER']) { $values['WEB_CHAT_DB_USER'] } else { 'web_chat' })
+    WEB_CHAT_DB_PASSWORD = Get-Required 'WEB_CHAT_DB_PASSWORD'
+}
+
+# 4. ConfigMap postgres-init — infra/postgres/ 의 init.sql, 20-web-chat-db.sh 그대로 (빈 볼륨 첫 기동 때만 실행됨)
 $initDir = Join-Path $infra 'postgres'   # 변수로: --from-file=(식) 은 PowerShell 이 인자 두 개로 나눈다
 kubectl create configmap postgres-init -n $namespace "--from-file=$initDir" --dry-run=client -o yaml | kubectl apply -f -
 if ($LASTEXITCODE -ne 0) { throw 'ConfigMap postgres-init 생성 실패' }
