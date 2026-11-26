@@ -287,6 +287,41 @@ docker build -t coupon-rush/frontend:local frontend   # npm run build 결과를 
 
 모든 이미지는 root가 아닌 사용자로 실행됩니다(백엔드 uid 10001, 프론트 nginx uid 101). Docker Desktop Kubernetes(kubeadm 방식)는 로컬 이미지를 그대로 씁니다(저장소에 push 불필요).
 
+## 로컬 Kubernetes로 실행 (8단계, 배포 모양 확인용)
+
+평소 개발은 위의 compose + bootRun + `npm run dev`가 빠릅니다. 이 방법은 "배포하면 이렇게 돈다"를 확인할 때 씁니다. 데이터(DB·Redis·Kafka)는 compose와 **따로**입니다.
+
+준비: Docker Desktop → Settings → Kubernetes → Enable(**kubeadm** 방식 — kind 방식은 로컬 이미지를 못 씀), 위 "서비스 이미지 빌드"로 이미지 5개.
+소셜 로그인을 하려면 각 제공자 콘솔에 `http://localhost/login/oauth2/code/{kakao|naver|google}`도 등록합니다(기존 8080 주소는 bootRun용으로 그대로).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File infra/k8s/local-setup.ps1   # 네임스페이스 + Secret(infra/.env에서) + ConfigMap
+kubectl apply -k infra/k8s/overlays/local                            # Postgres·Redis·Kafka + 앱 4개 + 게이트웨이
+kubectl get pods -n coupon-rush                                      # 8개 모두 Running(1/1)
+```
+
+브라우저: **http://localhost** (게이트웨이 Nginx가 화면 + /api 등을 각 서비스로 나눔).
+
+- 이미지를 다시 빌드했으면(같은 `:local` 태그) `kubectl rollout restart deploy -n coupon-rush`
+- `.env` 값을 바꿨으면 `local-setup.ps1`을 다시 실행한 뒤 같은 rollout restart
+- 내리기: `kubectl delete -k infra/k8s/overlays/local` (데이터는 PVC에 남음). 데이터까지 지우기: `kubectl delete pvc -n coupon-rush --all`
+- 관리자 만들기: `kubectl exec -it postgres-0 -n coupon-rush -- psql -U <POSTGRES_USER> -d <POSTGRES_DB>` 에서 `UPDATE users SET role='ADMIN' WHERE id=<내 id>;` 후 다시 로그인
+
+### DBeaver 등 DB 도구로 클러스터 DB 보기
+
+클러스터 Postgres는 PC에 포트가 열려 있지 않습니다(브라우저는 게이트웨이 → 앱 → DB로만 닿음). DB 도구로 보려면 **먼저 port-forward로 통로를 엽니다**.
+
+```powershell
+kubectl port-forward -n coupon-rush pod/postgres-0 15432:5432   # "Forwarding from 127.0.0.1:15432" — 이 터미널은 켜 둔다
+```
+
+DBeaver 새 연결(PostgreSQL): Host `localhost`, Port **`15432`**, Database·Username·Password는 `infra/.env`의 `POSTGRES_DB`·`POSTGRES_USER`·`POSTGRES_PASSWORD`
+(채팅 DB는 Database `web_chat` + `WEB_CHAT_DB_USER`·`WEB_CHAT_DB_PASSWORD`, 또는 PostgreSQL 탭 "Show all databases").
+
+- 터미널을 닫거나 Pod가 다시 뜨면 끊긴다 → 명령을 다시 실행
+- 5432가 아니라 15432인 이유: compose Postgres(localhost:5432)와 겹치지 않게. **두 DB는 데이터가 다르다** — 연결 이름을 "coupon-rush (k8s)"처럼 구분할 것
+- 통로는 PC 안(127.0.0.1)에서만 열린다. 쿠폰·발급 데이터를 직접 고치면 Redis와 어긋날 수 있어 조회 위주로
+
 ## 문제 해결
 
 | 증상 | 원인 / 해결 |
@@ -296,7 +331,7 @@ docker build -t coupon-rush/frontend:local frontend   # npm run build 결과를 
 | web-chat-service 기동이 `database "web_chat" does not exist` 또는 `password authentication failed for user "web_chat"` | 기존 볼륨이라 초기화 스크립트가 안 돎 → [2-3](#2-3-선택-개발-중-채팅-서버-web-chat-service-8083)의 `20-web-chat-db.sh` 직접 실행. 비밀번호를 나중에 바꿨다면 스크립트는 기존 계정 비밀번호를 바꾸지 않으므로 `ALTER ROLE web_chat PASSWORD '...'` |
 | DB 접속이 `password authentication failed` | 볼륨이 예전 비밀번호로 만들어짐. 로컬 데이터라면 `docker compose down -v` 후 다시 `up` |
 | 화면 API가 전부 실패, Vite 터미널에 `http proxy error ... ECONNREFUSED` | 백엔드(8080)가 떠 있지 않음 |
-| 로그인 시 "등록되지 않은 redirect_uri" | 제공자 콘솔에 `http://localhost:8080/login/oauth2/code/{provider}` 미등록 |
+| 로그인 시 "등록되지 않은 redirect_uri" | 제공자 콘솔에 `http://localhost:8080/login/oauth2/code/{provider}` 미등록 (로컬 Kubernetes로 띄웠으면 `http://localhost/login/oauth2/code/{provider}`) |
 | 발급 시 503 "준비 중" | 해당 이벤트의 Redis 재고가 없음 → `POST /api/admin/coupons/{id}/stock/sync` (관리자 토큰) |
 | PowerShell의 `curl`이 이상하게 동작 | PowerShell 5.1의 `curl`은 `Invoke-WebRequest` 별칭입니다. `curl.exe`를 사용하세요 |
 

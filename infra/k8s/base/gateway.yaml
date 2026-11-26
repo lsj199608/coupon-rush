@@ -1,0 +1,70 @@
+# 게이트웨이 (8-4) — 클러스터의 유일한 입구. 이미지 coupon-rush/frontend:local (프론트 정적 파일 + Nginx 리버스 프록시, 설정 frontend/nginx/*.conf)
+#   브라우저 → http://localhost (Service LoadBalancer 80) → gateway Pod 8080 ─┬ /api/web-chat/rooms, /ws/web-chat → web-chat-service
+#                                                                            ├ /api, /oauth2, /login/oauth2       → coupon-api
+#                                                                            └ 그 밖                               → 정적 파일 / index.html
+# Docker Desktop 은 LoadBalancer Service 를 PC 의 localhost 에 연다. AWS 에서는 overlay 에서 로드밸런서(ALB 등) 앞단으로 바꾼다.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gateway
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101     # 이미지의 nginx 사용자
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: gateway
+          image: coupon-rush/frontend:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: tmp            # pid 파일 (/tmp/nginx.pid)
+              mountPath: /tmp
+            - name: cache          # 프록시 캐시(api)·임시 파일(요청 본문 등)
+              mountPath: /var/cache/nginx
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cache
+          emptyDir:
+            sizeLimit: 64Mi

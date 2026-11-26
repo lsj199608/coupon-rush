@@ -20,6 +20,8 @@ const WEB_CHAT = 'http://localhost:8083';
  *   카카오 등은 로그인 후 브라우저를 8080 콜백으로 보내고, 백엔드가 refresh 쿠키를 심은 뒤 5173/oauth/callback 으로 돌려보낸다.
  *   쿠키는 포트를 구분하지 않으므로(localhost) 이후 5173 → /api/auth/refresh 요청에도 실린다.
  *
+ * ⚠ 배포(8단계 Kubernetes)에서는 같은 규칙을 Nginx 게이트웨이(frontend/nginx/default.conf)가 한다 — 경로 규칙을 바꾸면 두 곳을 함께 고친다.
+ *
  * 채팅(7단계 D4)은 두 서비스에 나뉜다 — 연결 티켓 /api/web-chat/tickets 는 coupon-api(8080), 지난 대화 /api/web-chat/rooms 와
  *   WebSocket /ws/web-chat 은 web-chat-service(8083).
  *   ⚠ Vite 는 규칙을 **적은 순서대로** 보고 처음 맞는 것을 쓴다 → 더 긴 /api/web-chat/rooms 를 /api 보다 먼저 둔다 (routes.test.ts 가 검사).

@@ -232,7 +232,12 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         공개 목록·지난 대화 200, 자연어 검색 AI 조건 COMPLETED 1초, 관리자 생성 → Redis 재고 적재, 발급 202 → COMPLETED 1초, 챗봇 "내 쿠폰" COMPLETED 1초
         (llm-service → mcp-server → coupon-api 내부 API, 링크 http://localhost/events/{id}), 채팅 티켓 200, 일반 회원 → 관리자 403·토큰 없음 401,
         coupon-api Pod 삭제 → 8초 뒤 새 Pod Ready(그동안 다른 앱 정상). **NetworkPolicy는 Docker Desktop에서 지켜지지 않음**(아래 메모)
-  - [ ] 8-4) 입구 Nginx 게이트웨이 (localhost, OAuth 콜백, /internal 차단, 1초 캐시)
+  - [x] 8-4) 입구 Nginx 게이트웨이 (2026-11-26) — 아래 "게이트웨이 (8-4)" 메모. 브라우저 확인: http://localhost 에서 **카카오·구글 로그인 OK**
+        (콘솔에 http://localhost/login/oauth2/code/{제공자} 추가 등록), 클러스터 DB에서 ADMIN 변경 → 새로고침으로 반영. 네이버 로그인은 8-6에서.
+        확인(PC → http://localhost): 화면 경로(/, /events/3, /login) index.html, /api → coupon-api, /api/web-chat/rooms → web-chat-service,
+        /internal·/actuator는 백엔드에 안 닿음(index.html), 정적 응답 보안 헤더, OAuth redirect_uri = http://localhost/login/oauth2/code/kakao,
+        상세 캐시 MISS → HIT → HIT, 발급 202 → COMPLETED 후 상세 남은 수량 반영, X-Forwarded-For 위조 무시(검색 한도 키가 실제 주소),
+        WebSocket Origin http://localhost 101 / 다른 출처 403, 티켓으로 STOMP 연결·구독·보내기·받기·지난 대화 저장
   - [ ] 8-5) 여러 대 (coupon-api·web-chat-service 2대, ShedLock, rolling update + graceful shutdown)
   - [ ] 8-6) 수동 확인 (docs/manual-check.md 절차를 클러스터에서)
 - [ ] 9. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. 아래 "Spring Batch 계획 (E)"
@@ -306,6 +311,22 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - 클러스터 DB는 compose DB와 별개(빈 DB에서 Flyway V1~). 로그인은 8-4 입구 전까지 불가 → 확인은 시험 회원 + Secret의 JWT_SECRET으로 직접 서명한 access token
     (jjwt는 키 길이로 HS256/384/512, claims sub·token_type=access·jti·role·exp). 사람 MCP 클라이언트는 `kubectl port-forward -n coupon-rush svc/mcp-server 8082:8082`.
   - PowerShell 5.1로 kubectl exec -i 에 한글을 파이프하면 `$OutputEncoding`(기본 ASCII) 때문에 ?로 깨진다 → `$OutputEncoding = New-Object Text.UTF8Encoding($false)`.
+- **게이트웨이 (8-4)**: base/gateway.yaml — Deployment gateway(이미지 coupon-rush/frontend:local = 프론트 정적 파일 + Nginx) + Service **LoadBalancer 80 → 8080**
+  (Docker Desktop은 LoadBalancer를 PC의 localhost에 연다 → 브라우저 http://localhost). 클러스터의 유일한 입구.
+  - 설정 frontend/nginx/: default.conf(라우팅·캐시) + snippets 두 개 — proxy-headers.conf(Host·X-Forwarded-*), security-headers.conf(nosniff·X-Frame-Options DENY·Referrer-Policy).
+    snippet으로 나눈 이유: nginx는 location 안에 proxy_set_header / add_header가 하나라도 있으면 바깥 것을 **물려받지 않는다**(WebSocket·assets location에서 통째로 빠짐).
+  - 라우팅은 Vite 프록시와 같다(규칙을 바꾸면 vite.config.ts와 함께): /api/web-chat/rooms/·= /ws/web-chat → web-chat-service:8083, /api/·/oauth2/·/login/oauth2/ → coupon-api:8080,
+    그 밖은 정적 파일/SPA. **/internal/**, /actuator/**, mcp-server는 프록시 규칙에 없어서 백엔드에 닿지 않는다**(index.html이 나감).
+  - Host는 브라우저 값 그대로($http_host) + coupon-api SERVER_FORWARDHEADERSSTRATEGY=native → OAuth redirect_uri = http://localhost/login/oauth2/code/{제공자}.
+    **X-Forwarded-For는 덧붙이지 않고 $remote_addr로 덮어쓴다**(맨 앞 입구라 브라우저가 보낸 값은 위조 가능 — 비로그인 검색 한도가 IP 기준).
+    로컬에서 $remote_addr는 Docker Desktop 중계 주소(192.168.127.x)라 비로그인 전원이 한 한도를 나눠 씀. AWS에서 앞에 로드밸런서가 생기면 real_ip(set_real_ip_from)로 바꿀 것.
+  - **상세 1초 캐시(D5 대신)**: `location ~ ^/api/coupons/[0-9]+$`만, proxy_cache_valid 200 1s, proxy_cache_lock(빈 캐시에 동시 요청 → 1개만 백엔드), use_stale updating,
+    키 = 메서드 + 경로(응답이 회원과 무관해서 Authorization·쿠키 무시). Spring Security의 Cache-Control no-store는 proxy_ignore_headers로 **nginx 판단에서만** 무시 —
+    브라우저에는 그대로 가서 브라우저는 캐시 안 함. 응답 헤더 X-Cache-Status(MISS/HIT). **nginx 캐시 시간은 초 단위라 실제로는 1~2초 묵을 수 있다**(1.2초 뒤에도 HIT 확인).
+  - WebSocket: Upgrade/Connection(map $http_upgrade), proxy_read/send_timeout 1h, Origin은 그대로 넘겨 채팅 서버가 검사(APP_WEBCHAT_ALLOWEDORIGINS=http://localhost).
+  - Pod: nginx(uid 101), readOnlyRootFilesystem + emptyDir /tmp(pid)·/var/cache/nginx(캐시·임시, 64Mi), 32Mi/128Mi.
+  - ⚠ 이미지가 백엔드를 Service 이름으로 가리켜서 **클러스터 밖 docker run으로는 안 뜬다**(nginx가 기동 때 proxy_pass 이름을 못 풀면 멈춤).
+  - OAuth 콘솔에 `http://localhost/login/oauth2/code/{kakao|naver|google}` 추가 등록 필요(기존 8080 콜백은 bootRun 개발용으로 그대로 둠).
 - 접속 정보/비밀값은 infra/.env 하나로 관리. docker-compose와 Spring(application.yml의
   spring.config.import: optional:file:../../infra/.env[.properties], 작업 폴더 backend/coupon-api 기준)이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
 - 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.
