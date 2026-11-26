@@ -1,0 +1,67 @@
+# Redis (8-2) — 재고·발급 집합·토큰·티켓·한도. compose 와 같은 이미지
+#
+# compose 와 다른 점: AOF(appendonly) 를 켠다. Pod 는 노드 이동·재시작이 잦은데, 기본 RDB 스냅숏만이면
+# 마지막 스냅숏 뒤의 재고 차감이 사라져 Redis ↔ DB 불일치(재고 과다)가 된다. everysec = 최대 1초 유실.
+# (그래도 유실되면 대조 점검 + POST /api/admin/coupons/{id}/stock/sync — 4단계 메모)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: 6379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: redis
+          image: redis:8.12-alpine
+          args: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--dir", "/data"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

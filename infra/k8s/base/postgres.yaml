@@ -1,0 +1,87 @@
+# Postgres (8-2) — compose 의 postgres 와 같은 이미지·초기화 스크립트. 데이터베이스 coupon_rush(coupon-api) + web_chat(web-chat-service)
+#
+# Secret postgres (local-setup.ps1 이 infra/.env 에서 필요한 키만): POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD / WEB_CHAT_DB_USER / WEB_CHAT_DB_PASSWORD
+# ConfigMap postgres-init (local-setup.ps1 이 infra/postgres/ 파일 그대로): init.sql(pgvector), 20-web-chat-db.sh — 빈 볼륨으로 처음 뜰 때만 실행
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  # headless: StatefulSet 의 고정 이름(postgres-0.postgres)용. Pod 가 하나라 `postgres` 로 접속해도 같은 Pod
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  # StatefulSet 을 지워도 PVC(데이터)는 남긴다 (기본값이지만 의도를 적어 둠)
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      # 같은 네임스페이스 Service 마다 붙는 POSTGRES_PORT=tcp://... 같은 환경변수를 끈다 (앱 설정 이름과 겹침 — 8-3 메모)
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60   # 종료 신호 후 체크포인트를 마칠 시간
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg17
+          envFrom:
+            - secretRef:
+                name: postgres
+          env:
+            # 볼륨 최상위가 아니라 하위 폴더에 (볼륨 루트에 lost+found 등이 있으면 initdb 가 거절)
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 768Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+            # 실행 권한: 엔트리포인트는 실행 가능한 .sh 는 실행하고, 아니면 자기 셸 안에서 source 한다
+            # (source 되면 스크립트의 set -eu 가 엔트리포인트에 번진다 — compose 의 Windows 바인드 마운트는 실행 가능으로 보였음)
+            defaultMode: 0555
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

@@ -225,7 +225,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - [x] 8-1) 이미지 (2026-11-26) — 아래 "서비스 이미지 (8-1)" 메모. coupon-api·mcp-server·web-chat-service Dockerfile(llm-service와 같은 모양) + frontend/Dockerfile(Nginx).
         확인: 5개 빌드, 백엔드 4개를 compose 네트워크(coupon-rush_default)에 붙여 기동 → actuator UP·Docker healthy·사용자 app,
         프론트 /healthz·SPA 경로(/events/3 → index.html)·assets 1년 캐시·index.html no-cache·nginx 사용자·버전 숨김
-  - [ ] 8-2) 데이터 저장소 StatefulSet + PV (Postgres·Redis·Kafka, web_chat 초기화 ConfigMap, Secret)
+  - [x] 8-2) 데이터 저장소 (2026-11-26) — 아래 "로컬 Kubernetes 매니페스트 (8-2)" 메모. Postgres·Redis·Kafka StatefulSet + PVC, local-setup.ps1(Secret·ConfigMap).
+        확인: 초기화(pgvector·web_chat DB·web_chat 계정은 coupon_rush 접속 거절), Redis AOF, Kafka 토픽 생성·메시지,
+        Pod 3개 삭제 후 재생성·`kubectl delete -k` 후 재적용 모두 데이터 유지(PVC 남음)
   - [ ] 8-3) 앱 Deployment + Service (ConfigMap/Secret, readiness/liveness, 요청/상한)
   - [ ] 8-4) 입구 Nginx 게이트웨이 (localhost, OAuth 콜백, /internal 차단, 1초 캐시)
   - [ ] 8-5) 여러 대 (coupon-api·web-chat-service 2대, ShedLock, rolling update + graceful shutdown)
@@ -269,6 +271,21 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   nginxinc/nginx-unprivileged:alpine은 9C/31H로 훨씬 많았다. nginx 단계에서 `apk upgrade`(zlib 1.4 수정판 — Critical 1 제거).
   이미지 스캔 결과(2026-11-26): 백엔드 4개는 spring-webmvc 2C(영향 없음, 위 보안 검사)만, 프론트는 High 2(libxml2·musl, 수정판 없음). 설정 frontend/nginx/default.conf(/healthz, /assets/ 1년 immutable, index.html no-cache, SPA try_files, server_tokens off).
   Docker HEALTHCHECK는 compose용이고 Kubernetes는 매니페스트 probe를 쓴다. mcp-server는 이미지 안에서도 127.0.0.1에만 열림 → 8-3에서 바꿈.
+- **로컬 Kubernetes 매니페스트 (8-2)**: infra/k8s/base(kustomization + postgres/redis/kafka.yaml) + overlays/local(지금은 base 그대로), 네임스페이스 coupon-rush.
+  순서: `powershell -ExecutionPolicy Bypass -File infra/k8s/local-setup.ps1` → `kubectl apply -k infra/k8s/overlays/local`. 내리기 `kubectl delete -k infra/k8s/overlays/local`(PVC·데이터는 남음).
+  - local-setup.ps1(BOM 있는 UTF-8): 네임스페이스 + Secret `postgres`(.env에서 POSTGRES_*·WEB_CHAT_DB_* 5개만 — 서비스마다 필요한 키만 Secret을 나눈다, 값은 임시 파일로 넘김)
+    + ConfigMap `postgres-init`(infra/postgres/ 원본 — Kustomize는 자기 폴더 밖 파일을 못 읽어서 복사본 대신 스크립트). 여러 번 실행해도 됨(dry-run | apply).
+    PowerShell 5.1 함정 두 개: Stop 설정에서 kubectl의 stderr가 오류가 됨(→ --ignore-not-found), `--from-file=(식)`은 인자 두 개로 쪼개짐(→ 변수).
+  - **Namespace를 kustomization에 넣지 않는다** — `delete -k`가 네임스페이스를 지우면 PVC도 지워지고, hostpath는 PVC가 지워지면 데이터도 지운다(Delete).
+    StatefulSet persistentVolumeClaimRetentionPolicy Retain. 데이터까지 지우려면 `kubectl delete pvc -n coupon-rush --all`.
+  - **모든 Pod에 enableServiceLinks: false** — 켜 두면 Service마다 `{이름}_PORT=tcp://IP:포트` 등이 주입된다. Service `kafka` → KAFKA_PORT 등을 apache/kafka 이미지가 서버 설정으로 바꿔 깨지고,
+    `redis`·`postgres` → REDIS_PORT·POSTGRES_PORT가 앱 설정 이름과 겹친다(8-3 앱 Pod도 반드시).
+  - Service는 모두 headless(clusterIP None, Pod 하나). 주소: postgres:5432, redis:6379, Kafka는 **kafka-0.kafka.coupon-rush.svc.cluster.local:9092 하나**
+    (compose의 리스너 두 개 → 하나. advertised가 클러스터 DNS라 PC에서는 접속 안 됨 → `kubectl exec kafka-0 -n coupon-rush -- /opt/kafka/bin/...`).
+  - Postgres: PGDATA는 볼륨 하위 폴더, 초기화 ConfigMap은 defaultMode 0555(실행 권한 없으면 엔트리포인트가 source해서 스크립트의 set -eu가 번짐). 빈 PVC 첫 기동 때만 실행.
+  - Redis: compose와 달리 **AOF 켬**(appendonly yes, everysec) — Pod 재시작 때 마지막 RDB 스냅숏 뒤 재고 차감이 사라지면 Redis ↔ DB 불일치.
+  - Kafka: KAFKA_LOG_DIRS 볼륨, 힙 256m~512m(상한 1Gi), fsGroup 1000, probe는 tcpSocket(api-versions 스크립트는 JVM을 띄워 무거움).
+  - 요청/상한: postgres 256Mi/768Mi, redis 64Mi/256Mi, kafka 768Mi/1Gi. compose 스택과 동시에 켜도 포트는 안 겹침(클러스터 Service는 밖에 안 열림), 메모리만 더 씀.
 - 접속 정보/비밀값은 infra/.env 하나로 관리. docker-compose와 Spring(application.yml의
   spring.config.import: optional:file:../../infra/.env[.properties], 작업 폴더 backend/coupon-api 기준)이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
 - 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.

@@ -1,0 +1,18 @@
+# 공통 매니페스트 (8단계). 환경별 차이는 overlays/{local, aws} 에서 덮어쓴다.
+#   적용: kubectl apply -k infra/k8s/overlays/local   (먼저 infra/k8s/local-setup.ps1 — 네임스페이스·Secret·ConfigMap)
+#
+# Namespace 는 여기에 넣지 않는다: `kubectl delete -k` 가 네임스페이스까지 지우면 그 안의 PVC 도 지워지고,
+# StorageClass hostpath 는 PVC 가 지워지면 데이터도 지운다(reclaimPolicy Delete). 네임스페이스는 local-setup.ps1 이 만든다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: coupon-rush
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: coupon-rush
+
+resources:
+  # 8-2 데이터 저장소 (StatefulSet + PVC)
+  - postgres.yaml
+  - redis.yaml
+  - kafka.yaml

@@ -1,0 +1,6 @@
+# 로컬 Kubernetes (Docker Desktop, kubeadm 방식) — 지금은 base 그대로. 로컬에만 필요한 차이가 생기면 여기서 덮어쓴다
+#   kubectl apply -k infra/k8s/overlays/local
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
