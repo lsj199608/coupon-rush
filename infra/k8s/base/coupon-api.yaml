@@ -17,7 +17,16 @@ kind: Deployment
 metadata:
   name: coupon-api
 spec:
-  replicas: 1   # 2대는 8-5 (스케줄러 중복 실행 ShedLock 과 함께)
+  # 2대 (8-5): 한 대가 죽어도 다른 한 대가 받는다(active-active). @Scheduled 는 ShedLock 으로 한 대만,
+  # 재고·티켓·한도는 Redis, Kafka 컨슈머는 같은 그룹이라 파티션을 나눠 받는다
+  replicas: 2
+  # 배포 = 한 대씩 교체: 새 Pod 를 먼저 하나 더 띄우고(surge 1) Ready 가 되기 전에는 옛 Pod 를 끄지 않는다(unavailable 0)
+  # → 교체 중에도 요청을 받을 수 있는 Pod 가 항상 2대 이상
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: coupon-api
@@ -28,6 +37,9 @@ spec:
     spec:
       # Service 이름(redis, postgres, kafka …)마다 주입되는 REDIS_PORT=tcp://… 가 앱 설정 REDIS_PORT 와 겹친다 → 끈다
       enableServiceLinks: false
+      # 종료 순서 (8-5): preStop 10초 → SIGTERM → Spring graceful shutdown(처리 중 요청·Kafka 메시지 마무리, 최대 20초) → 끝.
+      # 합계보다 넉넉하게. 넘기면 SIGKILL
+      terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -47,11 +59,18 @@ spec:
           ports:
             - name: http
               containerPort: 8080
-          # 기동(Flyway·Kafka 연결 포함 15~30초)을 기다리는 동안 liveness 가 재시작시키지 않게
+          # Pod 를 끌 때 Kubernetes 는 "Service 에서 빼기"와 "SIGTERM"을 동시에 한다. 빠진 사실이 퍼지기(kube-proxy 규칙 갱신) 전
+          # 1~2초 사이에도 이 Pod 로 새 요청이 온다 → 그동안은 평소처럼 받고, 퍼진 뒤에 종료를 시작한다 (Kubernetes 자체 sleep — 셸 불필요)
+          lifecycle:
+            preStop:
+              sleep: { seconds: 10 }
+          # 기동(Flyway·Kafka 연결 포함 15~30초)을 기다리는 동안 liveness 가 재시작시키지 않게.
+          # 최대 300초: 느린 노트북 CPU(i5-8250U)에서 부하 중 rolling update 를 하면 기동이 100~120초를 넘겨
+          # 120초(60회)에 걸려 재시작됐다(2026-11-27). 이 값은 "기동이 멈췄을 때 알아채는 시간"일 뿐이라 넉넉해도 손해가 적다
           startupProbe:
             httpGet: { path: /actuator/health/liveness, port: http }
             periodSeconds: 2
-            failureThreshold: 60
+            failureThreshold: 150
           livenessProbe:
             httpGet: { path: /actuator/health/liveness, port: http }
             periodSeconds: 10

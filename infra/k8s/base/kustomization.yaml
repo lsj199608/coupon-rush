@@ -23,6 +23,8 @@ resources:
   - web-chat-service.yaml
   # 8-4 입구 (Nginx: 정적 파일 + 리버스 프록시, http://localhost)
   - gateway.yaml
+  # 8-5 계획된 중단에서도 최소 1대 (coupon-api·web-chat-service)
+  - disruption-budgets.yaml
 
 # 앱 설정 (비밀이 아닌 값). 비밀값은 local-setup.ps1 이 만드는 Secret(앱 이름과 같음)에.
 # generator 라 이름 끝에 내용 해시가 붙는다(coupon-api-config-abc123) → 값을 바꿔 apply 하면 Deployment 가 새 이름을 가리켜 Pod 가 자동으로 다시 뜬다.

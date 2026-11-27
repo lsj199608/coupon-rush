@@ -17,7 +17,13 @@ kind: Deployment
 metadata:
   name: web-chat-service
 spec:
-  replicas: 1   # 2대(서버 간 전달 D3 확인)는 8-5
+  # 2대 (8-5): 서버 간 전달은 Redis pub/sub(D3), 도배 제한도 Redis — 어느 Pod 에 붙어도 같은 방·같은 한도
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: web-chat-service
@@ -27,6 +33,10 @@ spec:
         app.kubernetes.io/name: web-chat-service
     spec:
       enableServiceLinks: false
+      # coupon-api 와 같은 종료 순서. WebSocket 은 몇 시간짜리 연결이라 "끝날 때까지 기다리기"가 안 된다 —
+      # 종료 때 연결이 닫히고 브라우저가 자동 재연결(D4, 새 티켓)로 살아 있는 Pod 에 붙은 뒤 지난 대화를 다시 읽는다.
+      # 저장 대기열은 꺼지기 전에 한 번 저장한다(D6 WebChatHistoryWriter)
+      terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -45,6 +55,9 @@ spec:
           ports:
             - name: http
               containerPort: 8083
+          lifecycle:
+            preStop:
+              sleep: { seconds: 10 }   # 이유는 coupon-api.yaml — Service 에서 빠진 사실이 퍼질 때까지 평소처럼 받기
           startupProbe:
             httpGet: { path: /actuator/health/liveness, port: http }
             periodSeconds: 2

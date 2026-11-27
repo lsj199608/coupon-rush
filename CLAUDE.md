@@ -241,7 +241,10 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - [ ] 8-5) 여러 대 (coupon-api·web-chat-service 2대, ShedLock, rolling update + graceful shutdown)
     - [x] ShedLock (2026-11-27) — 아래 "ShedLock (8-5)" 메모. coupon-api @Scheduled 2개(재고 대조 10분 / LLM 타임아웃 정리 30초)를 서버 한 대에서만.
           V10 shedlock 표, JDBC + DB 시계, 잠금 9분 / 25초. 테스트 SchedulerLockTest(6). 클러스터 2대 확인은 replicas 2와 함께
-    - [ ] replicas 2 (coupon-api·web-chat-service) + rolling update + graceful shutdown
+    - [x] replicas 2 + rolling update + graceful shutdown (2026-11-27) — 아래 "여러 대 (8-5)" 메모. coupon-api·web-chat-service 2대,
+          maxSurge 1 / maxUnavailable 0, preStop sleep 10초 + server.shutdown graceful(단계당 20초) + terminationGracePeriodSeconds 45, PDB minAvailable 1.
+          확인(부하 중 Pod 삭제, PC → http://localhost): coupon-api 목록 2,582건·채팅 지난 대화 5,742건 실패 0, ShedLock 타임아웃 정리 2분간 5회 모두 한 Pod,
+          PUBSUB NUMSUB 2. **preStop 없이도 실패 0**(2회) — 로컬 단일 노드는 Service 제외가 즉시 퍼져서(아래 메모). 이 PC 기동이 느려 startup probe 120초 → 300초
   - [ ] 8-6) 수동 확인 (docs/manual-check.md 절차를 클러스터에서)
 - [ ] 9. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. 아래 "Spring Batch 계획 (E)"
 - [ ] 10. Postgres → AWS RDS (마지막, 2026-11-24 결정) — 배포·배치가 끝난 뒤. 실무에서 가장 흔한 조합(앱은 Kubernetes, 운영 DB는 관리형)을
@@ -348,6 +351,22 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - 관리자 API(GET .../reconciliation)·LlmRequestTimeouts.sweep() 직접 호출은 잠금과 무관(@SchedulerLock은 스케줄러 메서드에만).
   - 테스트 SchedulerLockTest: 스케줄러를 켠 별도 컨텍스트(자동 실행은 initial-delay 1시간으로 미룸), ShedLock 프록시 메서드를 두 스레드에서 불러 두 서버를 흉내 —
     실행 중이면 건너뜀(기다리지 않음)·least 동안 재실행 없음(25초/540초 확인)·만료 후 재실행·작업끼리 독립·locked_by(호스트 이름 = Pod 이름).
+- **여러 대 (8-5, 2026-11-27)**: coupon-api·web-chat-service replicas 2 (llm-service·mcp-server·gateway는 1대 그대로).
+  - 장애(갑자기 죽음) = 남은 Pod가 받고 Kubernetes가 새로 띄움 / 배포(계획) = 두 대 모두 바꿔야 해서 한 대씩(rolling update). 같은 active-active 구조의 두 쓰임.
+  - strategy maxSurge 1 / maxUnavailable 0: 새 Pod가 Ready가 되기 전엔 옛 Pod를 끄지 않음 → 교체 중에도 받을 수 있는 Pod ≥ 2(잠깐 3).
+  - 종료 순서: Kubernetes는 "Service에서 빼기"와 SIGTERM을 **동시에** 한다 → preStop sleep 10초(Kubernetes 자체 sleep, 1.30+, 셸 불필요)로 빠진 사실이
+    퍼질 때까지 평소처럼 받기 → Spring server.shutdown graceful(Boot 3.4+ 기본이지만 명시) + spring.lifecycle.timeout-per-shutdown-phase 20s
+    (처리 중 요청·Kafka 현재 메시지 마무리 + 오프셋 커밋, 파티션은 다른 Pod로) → terminationGracePeriodSeconds 45(= 10 + 20 + 여유, 넘으면 SIGKILL).
+  - 종료 코드 143(128 + SIGTERM)은 Java의 정상 종료라 Kubernetes가 "Error"로 표시해도 문제 아님. 삭제 → 사라질 때까지 preStop 있음 약 18초 / 없음 8~13초.
+  - **실험: preStop 없이도 실패 0** (부하 4동시 × 40초 중 Pod 삭제 2회). 로컬은 노드가 하나라 kube-proxy 규칙이 SIGTERM보다 먼저 바뀐 것으로 본다.
+    노드가 여럿이거나 앞에 AWS 로드밸런서(대상 해제에 수 초)가 있으면 이 간격이 커진다 → preStop은 유지, AWS 때 다시 비교.
+    nginx는 proxy_pass 호스트 이름 하나(= Service ClusterIP)라 upstream keepalive가 없어 요청마다 새 연결 → 연결이 옛 Pod에 붙어 있는 문제는 없다.
+  - WebSocket은 몇 시간짜리라 graceful로 기다릴 수 없다 → 종료 때 닫히고 브라우저 자동 재연결(D4)로 살아 있는 Pod에. 저장 대기열은 꺼지기 전 저장(D6).
+  - PodDisruptionBudget minAvailable 1 (base/disruption-budgets.yaml): drain·업그레이드 같은 계획된 중단에서 두 대 동시 중단 방지. 로컬(노드 1개)에선 효과 적음, AWS용.
+  - Kafka: coupon-issue-requests 파티션 3 / Pod 2 × concurrency 3 = 6 → 3개는 대기(정상). llm-results 컨슈머도 Pod마다 1개 → 하나는 대기.
+  - **이 PC(i5-8250U 노트북, 4코어 1.6GHz)는 기동이 느리다**: 부하 없이 앱 47~60초, coupon-api 부하 중 100~120초 → startup probe 2초 × 60(120초)에 걸려 재시작 →
+    coupon-api만 × 150(300초). rolling update 전체가 2~4분 걸리므로 종료 실험은 rollout이 아니라 "부하 중 Pod 하나 삭제"로 했다.
+  - ShedLock 확인: SELECT … FROM shedlock — 2대에서 타임아웃 정리가 30초마다 한 Pod(locked_by)만. 사라진 Pod의 잠금은 lock_until이 지나면 다른 Pod가 이어받음.
 - 접속 정보/비밀값은 infra/.env 하나로 관리. docker-compose와 Spring(application.yml의
   spring.config.import: optional:file:../../infra/.env[.properties], 작업 폴더 backend/coupon-api 기준)이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
 - 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.

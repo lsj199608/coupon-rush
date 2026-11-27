@@ -1,0 +1,23 @@
+# PodDisruptionBudget (8-5): "계획된 중단"(노드 비우기 kubectl drain, 클러스터 업그레이드)에서 2대를 동시에 내리지 못하게 한다.
+# 최소 1대는 늘 떠 있어야 함 → drain 은 한 대가 다른 곳에서 Ready 가 될 때까지 다음 Pod 를 기다린다.
+# 장애(Pod·노드가 갑자기 죽음)와 rolling update 는 이 규칙과 무관하다 — 그건 replicas 2 와 Deployment strategy 가 맡는다.
+# 로컬은 노드가 하나라 효과를 보기 어렵다. AWS(노드 여러 대)에서 의미가 있어 미리 둔다.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: coupon-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: coupon-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web-chat-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web-chat-service

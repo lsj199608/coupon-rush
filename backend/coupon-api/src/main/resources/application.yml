@@ -1,3 +1,7 @@
+server:
+  # SIGTERM 을 받으면 새 연결은 받지 않고 처리 중인 요청은 끝낸 뒤 멈춘다 (8-5 rolling update). Boot 3.4+ 기본값이지만 의도를 적어 둔다
+  shutdown: graceful
+
 spring:
   application:
     name: coupon-rush
@@ -5,6 +9,11 @@ spring:
   # → 비밀번호를 코드/설정 파일에 두지 않고 docker-compose 와 같은 .env 하나로 관리
   config:
     import: optional:file:../../infra/.env[.properties]
+
+  # 종료 단계마다 기다리는 최대 시간 (8-5). 처리 중인 요청·Kafka 메시지가 이 안에 끝나야 한다.
+  # Kubernetes terminationGracePeriodSeconds(45) = preStop 10 + 이것 20 + 여유
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
 
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB}
