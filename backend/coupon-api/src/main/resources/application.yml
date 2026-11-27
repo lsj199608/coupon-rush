@@ -122,6 +122,10 @@ app:
       enabled: ${COUPON_RECONCILE_ENABLED:true}
       initial-delay: PT1M
       interval: PT10M
+      # 서버가 여러 대여도 한 대만 (ShedLock, 8-5). least = 금방 끝나도 이만큼 다른 서버가 못 돌림(주기보다 조금 짧게),
+      # most = 실행 중 서버가 죽었을 때 잠금이 풀리는 시간. most ≥ least
+      lock-at-least-for: PT9M
+      lock-at-most-for: PT9M
   llm:
     # LLM 요청(관리자 문구 생성)의 coupon-api 쪽 설정. LLM 키·모델·토큰 예산은 llm-service 설정이다
     request-timeout: ${LLM_REQUEST_TIMEOUT:60s}   # 이 안에 결과가 없으면 FAILED(TIMEOUT)
@@ -133,7 +137,10 @@ app:
     daily-token-budget: ${LLM_DAILY_TOKEN_BUDGET:50000}   # llm-service 와 같은 값. 이미 소진이면 접수 단계에서 429
     timeout-sweep:
       enabled: true
+      initial-delay: PT30S                        # 기동 후 첫 실행까지
       interval: PT30S                             # 마감 지난 PENDING 정리 주기
+      lock-at-least-for: PT25S                    # ShedLock (8-5) — reconcile 의 설명과 같음, 주기보다 조금 짧게
+      lock-at-most-for: PT25S
     search:                                       # 자연어 이벤트 검색 (공개). LLM 을 못 쓰면 키워드 검색으로 대신한다
       request-timeout: 15s                        # 검색창이라 짧게. 넘으면 키워드 검색 결과
       per-minute: 10                              # 회원별, 비로그인은 IP별

@@ -239,6 +239,9 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         상세 캐시 MISS → HIT → HIT, 발급 202 → COMPLETED 후 상세 남은 수량 반영, X-Forwarded-For 위조 무시(검색 한도 키가 실제 주소),
         WebSocket Origin http://localhost 101 / 다른 출처 403, 티켓으로 STOMP 연결·구독·보내기·받기·지난 대화 저장
   - [ ] 8-5) 여러 대 (coupon-api·web-chat-service 2대, ShedLock, rolling update + graceful shutdown)
+    - [x] ShedLock (2026-11-27) — 아래 "ShedLock (8-5)" 메모. coupon-api @Scheduled 2개(재고 대조 10분 / LLM 타임아웃 정리 30초)를 서버 한 대에서만.
+          V10 shedlock 표, JDBC + DB 시계, 잠금 9분 / 25초. 테스트 SchedulerLockTest(6). 클러스터 2대 확인은 replicas 2와 함께
+    - [ ] replicas 2 (coupon-api·web-chat-service) + rolling update + graceful shutdown
   - [ ] 8-6) 수동 확인 (docs/manual-check.md 절차를 클러스터에서)
 - [ ] 9. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. 아래 "Spring Batch 계획 (E)"
 - [ ] 10. Postgres → AWS RDS (마지막, 2026-11-24 결정) — 배포·배치가 끝난 뒤. 실무에서 가장 흔한 조합(앱은 Kubernetes, 운영 DB는 관리형)을
@@ -327,6 +330,24 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
   - Pod: nginx(uid 101), readOnlyRootFilesystem + emptyDir /tmp(pid)·/var/cache/nginx(캐시·임시, 64Mi), 32Mi/128Mi.
   - ⚠ 이미지가 백엔드를 Service 이름으로 가리켜서 **클러스터 밖 docker run으로는 안 뜬다**(nginx가 기동 때 proxy_pass 이름을 못 풀면 멈춤).
   - OAuth 콘솔에 `http://localhost/login/oauth2/code/{kakao|naver|google}` 추가 등록 필요(기존 8080 콜백은 bootRun 개발용으로 그대로 둠).
+- **ShedLock (8-5, 2026-11-27)**: 서버가 여러 대(active-active, rolling update 중 옛·새 Pod가 함께 도는 순간 포함)여도 coupon-api @Scheduled는 한 대에서만.
+  shedlock-spring + shedlock-provider-jdbc-template **6.10.0**(6.x = Spring 6 / Boot 3.5, 7.x는 Spring 7 / Boot 4). 설정 global/config/SchedulingConfig.
+  - 정체: DB 락(FOR UPDATE)이 아니라 shedlock 표(V10)의 작업 이름별 줄 하나 — "lock_until까지 내가 함". 잡기 = 그 줄을 UPDATE 한 번(몇 ms),
+    실행 중에는 DB에 걸린 잠금이 없어 발급·조회·다른 작업에 영향 없음. 진 서버는 기다리지 않고 이번 차례를 건너뛴다.
+  - 저장소 PostgreSQL(두 작업이 이미 DB를 쓰고, Redis 장애 중에도 타임아웃 정리는 돌아야 함), usingDbTime(판정 시계 = DB, Pod 시계 차이 무관).
+    컬럼은 ShedLock 문서 PostgreSQL 정의 그대로(TIMESTAMP — usingDbTime이 UTC로 씀).
+  | 작업 (잠금 이름) | 주기 | lock-at-least-for / most-for |
+  |---|---|---|
+  | CouponStockReconcileScheduler (coupon-stock-reconcile) | 10분 | 9분 / 9분 |
+  | LlmRequestTimeoutScheduler (llm-request-timeout-sweep) | 30초 | 25초 / 25초 |
+  least = 금방 끝나도 표시가 남아 늦게 깨어난 다른 서버가 또 돌리지 않음(주기보다 조금 짧게 → 다음 주기엔 풀림), most = 실행 중 Pod가 죽으면 풀리는 시간.
+  설정 app.coupon.reconcile.lock-at-*, app.llm.timeout-sweep.{initial-delay, lock-at-*} (환경변수 없음). 두 작업 모두 원래 두 번 돌아도 데이터는 안전 —
+  ShedLock은 중복 WARN·헛도는 조회를 없애고, 앞으로 생길 "두 번 돌면 안 되는" 작업의 규칙을 깔아 둔 것.
+  - ⚠ **shedlock 줄을 DELETE 하지 말 것**: ShedLock은 "이 이름의 줄은 만들었다"를 메모리에 기억하고 이후 UPDATE만 한다 → 줄이 없으면 UPDATE 0행 = "남이 잡음"으로 보고
+    그 서버는 재시작 전까지 작업을 계속 건너뛴다(테스트에서 실제로 겪음). 풀려면 lock_until을 과거로 UPDATE.
+  - 관리자 API(GET .../reconciliation)·LlmRequestTimeouts.sweep() 직접 호출은 잠금과 무관(@SchedulerLock은 스케줄러 메서드에만).
+  - 테스트 SchedulerLockTest: 스케줄러를 켠 별도 컨텍스트(자동 실행은 initial-delay 1시간으로 미룸), ShedLock 프록시 메서드를 두 스레드에서 불러 두 서버를 흉내 —
+    실행 중이면 건너뜀(기다리지 않음)·least 동안 재실행 없음(25초/540초 확인)·만료 후 재실행·작업끼리 독립·locked_by(호스트 이름 = Pod 이름).
 - 접속 정보/비밀값은 infra/.env 하나로 관리. docker-compose와 Spring(application.yml의
   spring.config.import: optional:file:../../infra/.env[.properties], 작업 폴더 backend/coupon-api 기준)이 같은 파일을 읽는다. .env는 기동 시에만 읽음.
 - 현재 시각은 Clock Bean(ClockConfig)으로 주입 → 테스트에서 시간 고정.
@@ -534,7 +555,7 @@ GET /api/admin/coupons/{id}/reconciliation, 스케줄러(app.coupon.reconcile.*,
 | 발행 타임아웃인데 실제로는 기록 + 컨슈머가 보상보다 먼저 처리 | 503인데 쿠폰 있음, Redis 재고 1 과다 | 감지만 ("DB에만 있는 사용자") |
 | 보상 Lua 실패 | 덜 발급 | 로그 + 대조 점검 |
 | 이벤트 하나의 DB 반영 속도 | 파티션당 약 50건/s (건당 처리) | 배치 컨슈머로 개선 예정 |
-| 스케줄러를 여러 서버에서 실행 | 중복 실행(읽기 전용) | 운영 시 ShedLock |
+| 스케줄러를 여러 서버에서 실행 | 중복 실행(읽기 전용) | ShedLock으로 한 대만 (8-5, 2026-11-27) |
 
 **측정 결과** (AsyncIssueBenchmarkTest, 32스레드, Testcontainers, 로컬 Windows + Docker Desktop, 워밍업 1회 후 1회 측정, 정합성 매회 확인)
 
