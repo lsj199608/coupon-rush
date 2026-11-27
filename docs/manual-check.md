@@ -277,6 +277,38 @@ curl.exe -s -i http://localhost:8082/mcp -H $acc -H "Content-Type: application/j
 - ✗ 가 있으면 기록표 내용을 그대로 붙여 주세요.
 - 정리: `docker compose --profile llm stop llm-service` (계속 쓸 거면 그대로 둬도 됨), bootRun·Vite 는 Ctrl+C.
 
+## 5. 로컬 Kubernetes에서 (8단계 8-6)
+
+위 A~L 을 **클러스터(http://localhost, 게이트웨이 경유)** 에서 다시 본다. 앱 코드는 같고 바뀐 것은 띄우는 방식·주소·여러 대(8-5)다.
+LLM 은 fake 그대로(H 제외). 클러스터 DB·Redis 는 compose 와 별개 — 관리자는 클러스터 DB 에서 따로 바꾼다.
+
+**띄우기** (README "로컬 Kubernetes로 실행"): 이미지 빌드 → `powershell -ExecutionPolicy Bypass -File infra/k8s/local-setup.ps1` → `kubectl apply -k infra/k8s/overlays/local`
+→ `kubectl get pods -n coupon-rush` 가 모두 Ready. compose·bootRun·Vite 는 띄우지 않는다.
+
+**명령 바꿔 읽기**
+
+| 위 절차 | 클러스터 |
+|---|---|
+| http://localhost:5173 / :8080 | **http://localhost** (화면·API 모두, 게이트웨이) |
+| `docker exec coupon-rush-redis redis-cli …` | `kubectl exec -n coupon-rush redis-0 -- redis-cli …` |
+| psql | `kubectl exec -it -n coupon-rush postgres-0 -- psql -U <POSTGRES_USER> -d <POSTGRES_DB>` |
+| E1 llm-service 끄기 / E4 켜기 | `kubectl scale deploy/llm-service -n coupon-rush --replicas=0` / `=1`, 로그 `kubectl logs -n coupon-rush deploy/llm-service` |
+| I7 mcp-server 끄기 | `kubectl scale deploy/mcp-server -n coupon-rush --replicas=0` (끝나면 `=1`) |
+| L8 채팅 서버 Ctrl+C / L9 다시 bootRun | `kubectl scale deploy/web-chat-service -n coupon-rush --replicas=0` / `=2` |
+| K MCP 연결 | `kubectl port-forward -n coupon-rush svc/mcp-server 8082:8082` 를 켜 둔 채 같은 명령 |
+| 이미지를 다시 빌드했을 때 | `kubectl rollout restart deploy/<앱> -n coupon-rush` (같은 `:local` 태그라 자동으로 안 바뀜) |
+
+**새 항목 (8-4·8-5에서 넘어온 것)**
+
+| # | 하는 일 | 기대 결과 |
+|---|---|---|
+| M1 | **네이버** 로그인 (네이버 콘솔에 `http://localhost/login/oauth2/code/naver` 추가 등록 후) | A1 과 같음 |
+| M2 | 채팅 창 2개 연결 → `kubectl get pods -n coupon-rush -l app.kubernetes.io/name=web-chat-service` 중 **하나만** 삭제 | 그 Pod 에 붙어 있던 창만 "다시 연결하는 중…" → 몇 초 뒤 "연결됨"(살아 있는 Pod), 다른 창은 끊기지 않음. 끊긴 사이 오간 메시지도 지난 대화로 보임 |
+| M3 | 두 창이 서로 다른 Pod 에 붙은 상태에서 대화 (Pod 별 로그로 확인) | 서로 바로 보임 (서버 간 전달 D3) |
+| M4 | 발급 중 coupon-api rolling update: 수량 N 이벤트에 여러 회원이 발급하는 동안 `kubectl rollout restart deploy/coupon-api -n coupon-rush` | 실패(5xx) 없음, 발급 수 ≤ N, 대조 API `GET /api/admin/coupons/{id}/reconciliation` 일치 |
+| M5 | `SELECT name, locked_by, locked_at FROM shedlock;` (몇 분 간격 2번) | 작업마다 한 Pod 이름, 타임아웃 정리는 30초마다 갱신 |
+| M6 | 상세 화면을 보며 F12 Network → `/api/coupons/{id}` 응답 헤더 | `X-Cache-Status` MISS → HIT (게이트웨이 1초 캐시) |
+
 ## 기록표
 
 | 항목 | 결과 (✓/✗) | 메모 |
@@ -293,3 +325,24 @@ curl.exe -s -i http://localhost:8082/mcp -H $acc -H "Content-Type: application/j
 | J 챗봇 창 (J1~J4) |✓ | 2026-11-20 브라우저 확인. fake 검색 한계("커피쿠폰"·"진행" 0건)는 고치지 않기로 |
 | K MCP 서버 ↔ Claude Code (K1~K9) |✓ | 2026-11-21 Bearer 연결로 도구 3개·로그아웃 토큰·헤더 없음·헤더 거절(401/400/200/403) 확인 |
 | L 이벤트 채팅 (L1~L11) |✓ | 2026-11-24 브라우저 창 2개(일반 + 시크릿, 다른 제공자). 티켓·송수신·도배 거절·지난 대화·비로그인 읽기·채팅 서버 재기동 후 자동 재연결·모바일 폭 |
+
+**로컬 Kubernetes (8-6)** — 5절 명령으로
+
+| 항목 | 결과 (✓/✗) | 메모 |
+|---|---|---|
+| A 로그인 (카카오·구글) | | |
+| M1 네이버 로그인 | | |
+| B 목록·상세·발급 | | |
+| C 관리자 생성 | | |
+| D AI 문구 추천 | | |
+| E 장애 격리 (llm-service scale 0) | | |
+| F 예산 초과 | | |
+| G 모바일 폭 | | |
+| I 챗봇 (API) | | |
+| J 챗봇 창 | | |
+| K MCP (port-forward, 선택) | | |
+| L 이벤트 채팅 |✓ | L1~L7·L10·L11 ✓ 2026-11-27 브라우저(http://localhost). L8·L9 ✓ 2026-11-27 (scale 0 → 두 창 "다시 연결하는 중…" 유지·목록 200·지난 대화 502 / scale 2 → 47초 뒤 Ready, 새로고침 없이 자동 재연결·티켓 재요청·대화 OK) |
+| M2~M3 채팅 Pod 하나 삭제·서버 간 전달 |✓ | 2026-11-27 창 A·B를 다른 Pod에 붙여(Pod별 /proc/net/tcp 연결 수로 확인) 대화 → B의 Pod 삭제 → B만 재연결, A 유지, 끊긴 사이 메시지 보임. 연결 분배는 무작위라 B 새로고침 3번 모두 같은 Pod → A의 Pod 라벨을 잠깐 바꿔 Service에서 빼는 방법으로 갈라 놓음 |
+| M4 발급 중 rolling update | | |
+| M5 ShedLock |✓ | 2026-11-27 (8-5) 2대에서 타임아웃 정리 2분간 5회 모두 한 Pod(locked_by), 사라진 Pod의 잠금은 lock_until 뒤 다른 Pod가 이어받음 |
+| M6 상세 캐시 | | |

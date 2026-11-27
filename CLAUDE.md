@@ -238,14 +238,29 @@ Redis, 메시지큐, 소셜 로그인, LLM 기능을 단계적으로 적용하�
         /internal·/actuator는 백엔드에 안 닿음(index.html), 정적 응답 보안 헤더, OAuth redirect_uri = http://localhost/login/oauth2/code/kakao,
         상세 캐시 MISS → HIT → HIT, 발급 202 → COMPLETED 후 상세 남은 수량 반영, X-Forwarded-For 위조 무시(검색 한도 키가 실제 주소),
         WebSocket Origin http://localhost 101 / 다른 출처 403, 티켓으로 STOMP 연결·구독·보내기·받기·지난 대화 저장
-  - [ ] 8-5) 여러 대 (coupon-api·web-chat-service 2대, ShedLock, rolling update + graceful shutdown)
+  - [x] 8-5) 여러 대 (coupon-api·web-chat-service 2대, ShedLock, rolling update + graceful shutdown) — 2026-11-27 완료.
+        브라우저로 보는 채팅 재연결·교체 중 발급 정확성은 8-6에서
     - [x] ShedLock (2026-11-27) — 아래 "ShedLock (8-5)" 메모. coupon-api @Scheduled 2개(재고 대조 10분 / LLM 타임아웃 정리 30초)를 서버 한 대에서만.
           V10 shedlock 표, JDBC + DB 시계, 잠금 9분 / 25초. 테스트 SchedulerLockTest(6). 클러스터 2대 확인은 replicas 2와 함께
     - [x] replicas 2 + rolling update + graceful shutdown (2026-11-27) — 아래 "여러 대 (8-5)" 메모. coupon-api·web-chat-service 2대,
           maxSurge 1 / maxUnavailable 0, preStop sleep 10초 + server.shutdown graceful(단계당 20초) + terminationGracePeriodSeconds 45, PDB minAvailable 1.
           확인(부하 중 Pod 삭제, PC → http://localhost): coupon-api 목록 2,582건·채팅 지난 대화 5,742건 실패 0, ShedLock 타임아웃 정리 2분간 5회 모두 한 Pod,
           PUBSUB NUMSUB 2. **preStop 없이도 실패 0**(2회) — 로컬 단일 노드는 Service 제외가 즉시 퍼져서(아래 메모). 이 PC 기동이 느려 startup probe 120초 → 300초
-  - [ ] 8-6) 수동 확인 (docs/manual-check.md 절차를 클러스터에서)
+  - [ ] 8-6) 수동 확인 (docs/manual-check.md 절차를 클러스터에서) — **진행 중**, 절차·기록표는 manual-check.md "5. 로컬 Kubernetes에서 (8-6)"
+    - [x] 완료 (2026-11-27, 노트북 PC): L 이벤트 채팅 L1~L11, M2~M3(채팅 Pod 하나 삭제 → 그 Pod 창만 재연결·서버 간 전달), M5 ShedLock(2대 중 한 Pod만 — 8-5 때 확인)
+    - [ ] **남은 것 (다른 PC에서 이어서)** — 추천 순서:
+          ① 브라우저: A 로그인(카카오·구글, A2~A5) / **M1 네이버**(먼저 네이버 콘솔에 `http://localhost/login/oauth2/code/naver` 추가 등록) /
+             B 발급 / C 관리자 생성 / D AI 문구 / G 모바일 폭 / J 챗봇 창 / M6 상세 캐시(X-Cache-Status MISS → HIT)
+          ② 함께: E 장애 격리(`kubectl scale deploy/llm-service --replicas=0` → 문구 생성 60~75초 뒤 중단 안내 → `=1`),
+             F 예산 초과(`kubectl exec -n coupon-rush redis-0 -- redis-cli HSET "llm:usage:{오늘}" total_tokens 50000` → 되돌리기)
+          ③ Claude가 API로: I 챗봇(로그인 access token 필요), **M4 발급 중 rolling update**(시험 회원 여러 명 발급 중 `kubectl rollout restart deploy/coupon-api`
+             → 5xx 0·발급 ≤ 수량·대조 API 일치, 시험 회원은 정리) — 교체에 2~4분 걸려 화면 확인과 섞이지 않게 마지막에
+          K MCP(port-forward)는 선택
+    - **다른 PC에서 시작할 때**: 클러스터·데이터는 PC마다 따로다(이 PC의 클러스터 DB·회원·이벤트는 옮겨지지 않음). 그 PC에 클러스터가 없으면
+      8-0 준비(`%USERPROFILE%\.wslconfig` — PC 메모리에 맞게, Kubernetes 켜기 **kubeadm**) → README "서비스 이미지 빌드" 5개 → local-setup.ps1 → `kubectl apply -k infra/k8s/overlays/local`
+      → http://localhost 에서 로그인 → 클러스터 DB에서 `UPDATE users SET role='ADMIN' WHERE id=…` (psql 은 `kubectl exec -n coupon-rush postgres-0 -- psql -U … -d …`).
+      **이미 클러스터가 있는 PC는 coupon-api·web-chat-service 이미지를 다시 빌드**(ShedLock·graceful 설정) 후 apply — V10(shedlock)이 기동 때 적용된다.
+      2026-11-27 노트북 PC(i5-8250U, 19.9GB)는 .wslconfig memory=12GB·processors=8, 앱 기동 50~120초(느림 — "여러 대 (8-5)" 메모)
 - [ ] 9. Spring Batch — 2026-11-22 결정: 후보 ①(종료된 이벤트 결과 집계), 별도 모듈 coupon-batch. 아래 "Spring Batch 계획 (E)"
 - [ ] 10. Postgres → AWS RDS (마지막, 2026-11-24 결정) — 배포·배치가 끝난 뒤. 실무에서 가장 흔한 조합(앱은 Kubernetes, 운영 DB는 관리형)을
       직접 옮겨 보며 차이(백업·접속 설정·비용)를 비교. web_chat 데이터베이스·계정(D6)과 coupon_batch 계정·batch 스키마(9단계)도 함께 옮겨야 한다
